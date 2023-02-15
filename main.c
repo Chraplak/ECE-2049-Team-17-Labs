@@ -9,410 +9,224 @@
 
 // PROTOTYPES
 __interrupt void Timer_A2_ISR(void);
-bool delay(long unsigned int millis);
-void resetTimer();
-void welcome(char key);
-void reset(char key);
-void play(char key);
-void win(void);
-void lose(void);
-void configButtons();
-char buttonStates();
-void configLEDs(char inbits);
-void nextState(int state);
+void home();
+void edit();
+void displayTime(long unsigned int seconds);
+void displayTemp(float inAvgTempC);
 
-// GLOBALS
-enum States{WELCOME, RESET, PLAY, WIN, LOSE};
-int currentState = RESET;
-long unsigned int currentTime = 0;
-long unsigned int startingTime = 0;
-long unsigned int delayDuration = 0;
-int timeIndex = 0;
-bool startTimer = false;
-int missCounter = 0;
+#define ADCSIZE 36
+// Temperature Sensor Calibration = Reading at 30 degrees C is stored at addr 1A1Ah
+// See end of datasheet for TLV table memory mapping
+#define CALADC12_15V_30C  *((unsigned int *)0x1A1A)
+// Temperature Sensor Calibration = Reading at 85 degrees C is stored at addr 1A1Ch
+//See device datasheet for TLV table memory mapping
+#define CALADC12_15V_85C  *((unsigned int *)0x1A1C)
 
-#define noteSize 36
+#define degC_per_bit (float)((float)(85.0 - 30.0))/((float)(CALADC12_15V_85C-CALADC12_15V_30C))
 
-// NOTE ARRAYS
-// stores a pitch, ledValue, and LCD xValue for each term in arrays; denotations in parentheses are for rests
-// pitch -> Hz
-double pitch[noteSize] = {0,0,0,0,
-                    784,784,784,784,
-                    000,784,784,1175,
-                    1047,1047,1047,0,
-                    932,932,880,880,
-                    784,784,784,784,
-                    000,784,784,1175,
-                    1318,1318,1318,0,
-                    1047,0,880,0};
-// ledValue -> (0x00) 0x08 0x04 0x02 0x01
-char ledValue[noteSize] = {0x00,0x00,0x00,0x00,
-                     BIT3,BIT3,BIT3,BIT3,
-                     0x00,BIT3,BIT3,BIT0,
-                     BIT1,BIT1,BIT1,0x00,
-                     BIT1,BIT1,BIT2,BIT2,
-                     BIT3,BIT3,BIT3,BIT3,
-                     0x00,BIT3,BIT3,BIT1,
-                     BIT0,BIT0,BIT0,BIT0,
-                     BIT1,0x00,BIT2,0x00};
-// xValue -> (-10) 20 40 60 80
-int xValue[noteSize] = {-10,-10,-10,-10,
-                  20,20,20,20,
-                  -10,20,20,80,
-                  60,60,60,-10,
-                  60,60,40,40,
-                  20,20,20,20,
-                  -10,20,20,60,
-                  80,80,80,-10,
-                  60,-10,40,-10};
-// (0x00) 0x01 0x02 0x04 0x08
-char buttonValue[noteSize] = {0x00,0x00,0x00,0x00,
-                        BIT0,BIT0,BIT0,BIT0,
-                        0x00,BIT0,BIT0,BIT3,
-                        BIT2,BIT2,BIT2,0x00,
-                        BIT2,BIT2,BIT1,BIT1,
-                        BIT0,BIT0,BIT0,BIT0,
-                        0x00,BIT0,BIT0,BIT2,
-                        BIT3,BIT3,BIT3,0x00,
-                        BIT2,0x00,BIT1,0x00};
+enum States{HOME, EDIT};
+int currentState = HOME;
+long unsigned int timeCount = (31 + 28 + 31 + 30 + 13) * 86400;
+bool update = false;
+float acdC[ADCSIZE];
+unsigned int adcIndex = 0;
+
 
 // MAIN
 void main(void) {
+
     WDTCTL = WDTPW | WDTHOLD;    // Stop watchdog timer. Always need to stop this!!
                                  // You can then configure it properly, if desired
 
     // timer A2 management
     TA2CTL = TASSEL_1 + ID_0 + MC_1; // 32786 Hz is set
-    TA2CCR0 = 31; // sets interrupt to occur every (TA2CCR0 + 1)/32786 seconds
+    TA2CCR0 = 32785; // sets interrupt to occur every (TA2CCR0 + 1)/32786 seconds
     TA2CCTL0 = CCIE; // enables TA2CCR0 interrupt
 
     // enables global interrupts
     _BIS_SR(GIE);
 
+
+    REFCTL0 &= ~REFMSTR;    // Reset REFMSTR to hand over control of
+                            // internal reference voltages to
+                            // ADC12_A control registers
+
+    ADC12CTL0 = ADC12SHT0_9 | ADC12REFON | ADC12ON;     // Internal ref = 1.5V
+
+    ADC12CTL1 = ADC12SHP;    // Enable sample timer
+
+    // Using ADC12MEM0 to store reading
+    ADC12MCTL0 = ADC12SREF_1 + ADC12INCH_10;    // ADC i/p ch A10 = temp sense
+                                                // ACD12SREF_1 = internal ref = 1.5v
+
+    __delay_cycles(100);                        // delay to allow Ref to settle
+
+    ADC12CTL0 |= ADC12ENC;                      // Enable conversion
+
     // setup for LEDs, LCD, Keypad, Buttons
     initLeds();
     configDisplay();
     configKeypad();
-    configButtons();
 
     // state machine
     while (1) {
         char key = getKey();
-        if (key == '#') {
-            nextState(RESET);
-        }
         switch (currentState) {
-        case(WELCOME):
-            welcome(key);
+        case HOME:
+            home();
         break;
-        case(RESET):
-            reset(key);
-        break;
-        case(PLAY):
-            play(key);
-        break;
-        case(WIN):
-            win();
-        break;
-        case(LOSE):
-            lose();
+        case EDIT:
+            edit();
         break;
         }
     }
-}
-
-// HARDWARE DELAY
-bool delay(long unsigned int millis) {
-    //Sets a new delay if one isn't currently running
-    if (delayDuration == 0) {
-        startingTime = currentTime;
-        delayDuration = millis;
-    }
-    return false;
-}
-
-// END HARDWARE DELAY
-bool delayEnd() {
-    //Returns true if the timer duraiton has ended
-    if (startingTime + delayDuration <= currentTime) {
-        resetTimer();
-        timeIndex++;
-        return true;
-    }
-    return false;
-}
-
-//RESET TIMER
-void resetTimer() {
-    //Resets all the timer variables
-    startingTime = 0;
-    delayDuration = 0;
-    currentTime = 0;
 }
 
 // TIMER INTERRUPT
 #pragma vector = TIMER2_A0_VECTOR
 __interrupt void Timer_A2_ISR(void) {
-    //Increments the time count
-    currentTime++;
+    timeCount++;
+    update = true;
 }
 
-// RESTART HARDWARE TIMER
-void timerStart() {
-    resetTimer();
-    delayDuration = 1;
-    currentTime = 2;
-}
+void home() {
+    if (update) {
+        update = false;
 
-//Sets the current state to the input state and resets timer variables
-void nextState(int state) {
-    currentState = state;
-    timeIndex = 0;
-    startTimer = false;
-}
+        ADC12CTL0 &= ~ADC12SC;      // clear the start bit
+        ADC12CTL0 |= ADC12SC;       // Sampling and conversion start
+                                    // Single conversion (single channel)
 
-// WELCOME STATE HANDLER
-void welcome(char key) {
+        unsigned int adc = ADC12MEM0;
 
-    //Starts count down if * is pressed
-    if (key == '*' && startTimer == false) {
-        startTimer = true;
-        timerStart();
-    }
+        float temperatureDegC = (float) ( (long)adc - CALADC12_15V_30C) * degC_per_bit + 30.0;
 
-    //Resets miss counter to 0
-    missCounter = 0;
+        acdC[adcIndex] = temperatureDegC;
+        adcIndex++;
+        if (adcIndex >= ADCSIZE) {
+            adcIndex = 0;
+        }
 
-    if (startTimer) {
-        //Plays the 3-2-1 count down
-        if (delayEnd()) {
+        volatile int i;
+        volatile float avgC = 0;
+        for (i = 0; i < ADCSIZE; i++) {
+            avgC += acdC[i];
+        }
+        avgC = avgC / (float)ADCSIZE;
+
+        if (timeCount % 3 == 0) {
             Graphics_clearDisplay(&g_sContext); // Clear the display
-
-            if (timeIndex == 1) {
-                Graphics_drawStringCentered(&g_sContext, "3", AUTO_STRING_LENGTH, 48, 15, TRANSPARENT_TEXT);
-                configLEDs(BIT0);
-                delay(1000);
-            }
-            else if (timeIndex == 2) {
-                Graphics_drawStringCentered(&g_sContext, "2", AUTO_STRING_LENGTH, 48, 15, TRANSPARENT_TEXT);
-                configLEDs(BIT1);
-                delay(1000);
-            }
-            else if (timeIndex == 3) {
-                Graphics_drawStringCentered(&g_sContext, "1", AUTO_STRING_LENGTH, 48, 15, TRANSPARENT_TEXT);
-                configLEDs(BIT0);
-                delay(1000);
-            }
-            else if (timeIndex == 4) {
-                Graphics_drawStringCentered(&g_sContext, "GO", AUTO_STRING_LENGTH, 48, 15, TRANSPARENT_TEXT);
-                configLEDs(BIT0 | BIT1);
-                delay(1000);
-            }
-            else if (timeIndex == 5) {
-                configLEDs(0x00);
-                nextState(PLAY);
-                timerStart();
-            }
+            displayTime(timeCount);
+            displayTemp(avgC);
             Graphics_flushBuffer(&g_sContext);
         }
     }
 }
 
-// RESET HANDLER
-void reset(char key) {
-    // *** Intro Screen ***
-    Graphics_clearDisplay(&g_sContext); // Clear the display
+void edit() {
 
-    // Write some text to the display
-    Graphics_drawStringCentered(&g_sContext, "MSP40 Hero", AUTO_STRING_LENGTH, 48, 15, TRANSPARENT_TEXT);
-    Graphics_drawStringCentered(&g_sContext, "Welcome", AUTO_STRING_LENGTH, 48, 25, TRANSPARENT_TEXT);
-    Graphics_drawStringCentered(&g_sContext, "Press *", AUTO_STRING_LENGTH, 48, 45, TRANSPARENT_TEXT);
-    Graphics_drawStringCentered(&g_sContext, "To Begin", AUTO_STRING_LENGTH, 48, 55, TRANSPARENT_TEXT);
-
-    //Pushes new screen update
-    Graphics_flushBuffer(&g_sContext);
-
-    //Resets variables
-    resetTimer();
-    timeIndex = 0;
-    startTimer = false;
-    configLEDs(0x00);
-    BuzzerOff();
-    setLeds(0x00);
-
-    currentState = WELCOME;
 }
 
-// PLAY STATE HANDLER
-void play(char key) {
-    //Starts timer variables again
-    if (startTimer == false) {
-            startTimer = true;
-            timerStart();
+void displayTime(long unsigned int seconds) {
+    unsigned int sec  = seconds % 60;
+    seconds -= sec;
+    unsigned int minutes = seconds % 3600;
+    seconds -= minutes * 60;
+    unsigned int hours = seconds % 86400;
+    seconds -= hours * 3600;
+    unsigned int days = seconds / 86400;
+
+    unsigned int months = 0;
+    bool leapYear = false;
+
+    volatile int i = 0;
+    for (i = 0; i < 12; i++) {
+        if ((i == 0 || i == 2 || i == 4 || i == 6 || i == 7 || i == 9 || i == 11) && days >= 31) {
+            months++;
+            days -= 31;
+        }
+        else if ((i == 3 || i == 5 || i == 8 || i == 10) && days >= 30) {
+            months++;
+            days -= 30;
+        }
+        else if (i == 1 && leapYear && days >= 29) {
+            months++;
+            days -= 29;
+        }
+        else if (i == 1 && !leapYear && days >= 28) {
+            months++;
+            days -= 28;
+        }
+        else i = 12;
     }
 
-    //Runs when the timer has finished its duration
-    if (delayEnd()) {
+    unsigned char month[] = {'J', 'a', 'n'};
+    unsigned char day[] = {floor(days / 10) + 48, (days % 10) + 48};
+    unsigned char hour[] = {floor(hours / 10) + 48, (hours % 10) + 48};
+    unsigned char minute[] = {floor(minutes / 10) + 48, (minutes % 10) + 48};
+    unsigned char second[] = {floor(seconds / 10) + 48, (seconds % 10) + 48};
 
-        // displays five sequential 'notes' at a time as zeroes on screen (rests are zeroes stores offscreen for organization)
-        // displays five notes in advance so player can see notes coming
-        Graphics_clearDisplay(&g_sContext); //clear screen
-        Graphics_drawStringCentered(&g_sContext, "0", AUTO_STRING_LENGTH, xValue[timeIndex+3], 20, TRANSPARENT_TEXT);
-        Graphics_drawStringCentered(&g_sContext, "0", AUTO_STRING_LENGTH, xValue[timeIndex+2], 30, TRANSPARENT_TEXT);
-        Graphics_drawStringCentered(&g_sContext, "0", AUTO_STRING_LENGTH, xValue[timeIndex+1], 40, TRANSPARENT_TEXT);
-        Graphics_drawStringCentered(&g_sContext, "0", AUTO_STRING_LENGTH, xValue[timeIndex], 50, TRANSPARENT_TEXT);
-        Graphics_drawStringCentered(&g_sContext, "0", AUTO_STRING_LENGTH, xValue[timeIndex-1], 60, TRANSPARENT_TEXT);
-        Graphics_drawLine(&g_sContext,0,60,96,60);
-
-        // sets LED value of current note in array
-        setLeds(ledValue[timeIndex-1]);
-
-        if(buttonValue[timeIndex-1] == buttonStates()) { // if button pressed corresponds to i'th button value, play i'th pitch value on buzzer
-            BuzzerOn(pitch[timeIndex-1]);
-        }
-        else {
-            BuzzerOff();
-            if(xValue[timeIndex-1] > 10) { // if i'th note is not a rest and was not pressed, add to missCounter and display "Miss!" at bottom
-                missCounter++;
-                Graphics_drawStringCentered(&g_sContext, "Miss!", AUTO_STRING_LENGTH, 48, 80, TRANSPARENT_TEXT);
-            }
-        }
-
-        Graphics_flushBuffer(&g_sContext);
-
-        // lose condition: if missCounter reaches 5, send to LOSE state
-        if(missCounter > 50) {
-            nextState(LOSE);
-            resetTimer();
-        }
-        //Runs if win state is reached
-        else if(timeIndex > noteSize) {
-            nextState(WIN);
-            resetTimer();
-        }
-
-        delay(250);
+    switch (months) {
+    case 1:
+        month[0] = 'F';month[1] = 'e';month[2] = 'b';
+    break;
+    case 2:
+        month[0] = 'M';month[1] = 'a';month[2] = 'r';
+    break;
+    case 3:
+        month[0] = 'A';month[1] = 'p';month[2] = 'r';
+    break;
+    case 4:
+        month[0] = 'M';month[1] = 'a';month[2] = 'y';
+    break;
+    case 5:
+        month[0] = 'J';month[1] = 'u';month[2] = 'n';
+    break;
+    case 6:
+        month[0] = 'J';month[1] = 'u';month[2] = 'l';
+    break;
+    case 7:
+        month[0] = 'A';month[1] = 'u';month[2] = 'g';
+    break;
+    case 8:
+        month[0] = 'S';month[1] = 'e';month[2] = 'p';
+    break;
+    case 9:
+        month[0] = 'O';month[1] = 'c';month[2] = 't';
+    break;
+    case 10:
+        month[0] = 'N';month[1] = 'o';month[2] = 'v';
+    break;
+    case 11:
+        month[0] = 'D';month[1] = 'e';month[2] = 'c';
+    break;
     }
+
+    unsigned char date[] = {month[0], month[1], month[2], ' ', day[0], day[1], 0x00};
+    unsigned char time[] = {hour[0], hour[1], ':', minute[0], minute[1], ':', second[0], second[1], 0x00};
+
+    Graphics_drawStringCentered(&g_sContext, date, AUTO_STRING_LENGTH, 48, 25, TRANSPARENT_TEXT);
+    Graphics_drawStringCentered(&g_sContext, time, AUTO_STRING_LENGTH, 48, 35, TRANSPARENT_TEXT);
 }
 
-// WIN STATE HANDLER
-void win(void) {
-    //Restarts timer if it hasn't started yet
-    if (startTimer == false) {
-        startTimer = true;
-        timerStart();
-    }
-    if (delayEnd()) {
-        //Runs the win condition once
-        if (timeIndex == 1) {
-            Graphics_clearDisplay(&g_sContext); // Clear the display
+void displayTemp(float inAvgTempC) {
+    float CToF = 33.8 * inAvgTempC;
 
-            // Write win text to the display
-            Graphics_drawStringCentered(&g_sContext, "You Win!", AUTO_STRING_LENGTH, 48, 15, TRANSPARENT_TEXT);
-            Graphics_drawStringCentered(&g_sContext, ":D", AUTO_STRING_LENGTH, 48, 25, TRANSPARENT_TEXT);
+    char tempC[] = {floor(inAvgTempC / 100.0) + 48,
+                    ((unsigned int)floor(inAvgTempC / 10.0) % 10) + 48,
+                    floor((unsigned int)inAvgTempC % 10) + 48,
+                    '.',
+                    ((int)floor(inAvgTempC * 10.0) % 10) + 48,
+                    ' ', 'C', 0x00};
 
-            //Pushes new screen update
-            Graphics_flushBuffer(&g_sContext);
+    char tempF[] = {floor(CToF / 100.0) + 30,
+                    ((unsigned int)floor(CToF / 10.0) % 10) + 48,
+                    ((unsigned int)CToF % 10) + 48, '.',
+                    (unsigned int)floor(CToF * 10.0) % 10 + 48,
+                    ' ', 'F', 0x00};
 
-            delay(2000);
-        }
-        else {
-            // reset everything
-            nextState(RESET);
-        }
-    }
-}
-
-// LOSE STATE HANDLER
-void lose(void) {
-    //Restarts timer if it hasn't started yet
-    if (startTimer == false) {
-        startTimer = true;
-        timerStart();
-    }
-    if (delayEnd()) {
-        //Runs the lose condition once
-        if (timeIndex == 1) {
-            Graphics_clearDisplay(&g_sContext); // Clear the display
-
-            // Write lose text to the display
-            Graphics_drawStringCentered(&g_sContext, "You Lose...", AUTO_STRING_LENGTH, 48, 15, TRANSPARENT_TEXT);
-            Graphics_drawStringCentered(&g_sContext, ":(", AUTO_STRING_LENGTH, 48, 25, TRANSPARENT_TEXT);
-
-            //Pushes new screen update
-            Graphics_flushBuffer(&g_sContext);
-
-            delay(2000);
-        }
-        else {
-            // reset everything
-            nextState(RESET);
-        }
-    }
-}
-
-// BUTTON CONFIGURATION HELPER
-void configButtons() {
-    //Sets P2.2, P3.6, P7.0, and P7.4 to IO
-    P2SEL &= ~BIT2;
-    P3SEL &= ~BIT6;
-    P7SEL &= ~(BIT0 | BIT4);
-
-    //Sets P2.2, P3.6, P7.0, and P7.4 to input
-    P2DIR &= ~BIT2;
-    P3DIR &= ~BIT6;
-    P7DIR &= ~(BIT0 | BIT4);
-
-    //Sets pins to use pull up/down
-    P2REN |= BIT2;
-    P3REN |= BIT6;
-    P7REN |= (BIT0 | BIT4);
-
-    //Sets pins to pull up
-    P2OUT |= BIT2;
-    P3OUT |= BIT6;
-    P7OUT |= (BIT0 | BIT4);
-}
-
-// BUTTON PRESS CHECKING HANDLER
-char buttonStates() {
-    char returnState = 0x00;
-    if ((P2IN & BIT2) == 0) {
-        returnState |= BIT2;
-    }
-    if ((P3IN & BIT6) == 0) {
-        returnState |= BIT1;
-    }
-    if ((P7IN & BIT0) == 0) {
-        returnState |= BIT0;
-    }
-    if ((P7IN & BIT4) == 0) {
-        returnState |= BIT3;
-    }
-    return returnState;
-}
-
-// LED CONFIGURATION HELPER
-void configLEDs(char inbits) {
-    //Sets pins to IO
-    P1SEL &= ~(BIT0);
-    P4SEL &= ~(BIT7);
-
-    //Sets pins to output
-    P1DIR |= (BIT0);
-    P4DIR |= (BIT7);
-
-    //Sets LEDs to off
-    P1OUT &= ~(BIT0);
-    P4OUT &= ~(BIT7);
-
-    //Sets Leds according to inbits
-    if (inbits & BIT0) {
-        P1OUT |= (BIT0);
-    }
-    if (inbits & BIT1) {
-        P4OUT |= (BIT7);
-    }
+    Graphics_drawStringCentered(&g_sContext, tempC, AUTO_STRING_LENGTH, 48, 45, TRANSPARENT_TEXT);
+    Graphics_drawStringCentered(&g_sContext, tempF, AUTO_STRING_LENGTH, 48, 55, TRANSPARENT_TEXT);
 }
 
 
