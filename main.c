@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include "peripherals.h"
-#incluce <pain.h>
+
 // PROTOTYPES
 __interrupt void Timer_A2_ISR(void);
 bool delay(long unsigned int millis);
