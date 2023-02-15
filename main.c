@@ -11,7 +11,7 @@
 __interrupt void Timer_A2_ISR(void);
 void home();
 void edit();
-void displayTime(long unsigned int seconds);
+void displayTime(int count);
 void displayTemp(float inAvgTempC);
 
 #define ADCSIZE 36
@@ -26,10 +26,15 @@ void displayTemp(float inAvgTempC);
 
 enum States{HOME, EDIT};
 int currentState = HOME;
-long unsigned int timeCount = (31 + 28 + 31 + 30 + 13) * 86400;
 bool update = false;
 float acdC[ADCSIZE];
 unsigned int adcIndex = 0;
+int timeCount = 0;
+
+int dayCount[12] = {31,28,31,30,31,30,31,31,30,31,30,31};
+int date[5];
+int tempC[5];
+int tempF[5];
 
 
 // MAIN
@@ -126,107 +131,43 @@ void home() {
 void edit() {
 
 }
+void displayTime (int count) {
+    int rawDays = count / 86400; // 60 * 60 * 24 = seconds in a day
+    int daysAccum = 0;
 
-void displayTime(long unsigned int seconds) {
-    unsigned int sec  = seconds % 60;
-    seconds -= sec;
-    unsigned int minutes = seconds % 3600;
-    seconds -= minutes * 60;
-    unsigned int hours = seconds % 86400;
-    seconds -= hours * 3600;
-    unsigned int days = seconds / 86400;
-
-    unsigned int months = 0;
-    bool leapYear = false;
-
-    volatile int i = 0;
-    for (i = 0; i < 12; i++) {
-        if ((i == 0 || i == 2 || i == 4 || i == 6 || i == 7 || i == 9 || i == 11) && days >= 31) {
-            months++;
-            days -= 31;
+    int i = 0;
+    for(i=0;i<12;i++) {
+        if (rawDays < (dayCount[i]+daysAccum)) {
+            date[0] = i + 1;
+            date[1] = (rawDays - daysAccum) + 1;
+            date[2] = ((count % 86400) - (daysAccum * 86400)) / 3600;
+            date[3] = ((count % 86400) - (daysAccum * 86400)) % 3600 / 60;
+            date[4] = ((count % 86400) - (daysAccum * 86400)) % 3600 % 60;
+            break;
         }
-        else if ((i == 3 || i == 5 || i == 8 || i == 10) && days >= 30) {
-            months++;
-            days -= 30;
-        }
-        else if (i == 1 && leapYear && days >= 29) {
-            months++;
-            days -= 29;
-        }
-        else if (i == 1 && !leapYear && days >= 28) {
-            months++;
-            days -= 28;
-        }
-        else i = 12;
+        else daysAccum += dayCount[i];
     }
-
-    unsigned char month[] = {'J', 'a', 'n'};
-    unsigned char day[] = {floor(days / 10) + 48, (days % 10) + 48};
-    unsigned char hour[] = {floor(hours / 10) + 48, (hours % 10) + 48};
-    unsigned char minute[] = {floor(minutes / 10) + 48, (minutes % 10) + 48};
-    unsigned char second[] = {floor(seconds / 10) + 48, (seconds % 10) + 48};
-
-    switch (months) {
-    case 1:
-        month[0] = 'F';month[1] = 'e';month[2] = 'b';
-    break;
-    case 2:
-        month[0] = 'M';month[1] = 'a';month[2] = 'r';
-    break;
-    case 3:
-        month[0] = 'A';month[1] = 'p';month[2] = 'r';
-    break;
-    case 4:
-        month[0] = 'M';month[1] = 'a';month[2] = 'y';
-    break;
-    case 5:
-        month[0] = 'J';month[1] = 'u';month[2] = 'n';
-    break;
-    case 6:
-        month[0] = 'J';month[1] = 'u';month[2] = 'l';
-    break;
-    case 7:
-        month[0] = 'A';month[1] = 'u';month[2] = 'g';
-    break;
-    case 8:
-        month[0] = 'S';month[1] = 'e';month[2] = 'p';
-    break;
-    case 9:
-        month[0] = 'O';month[1] = 'c';month[2] = 't';
-    break;
-    case 10:
-        month[0] = 'N';month[1] = 'o';month[2] = 'v';
-    break;
-    case 11:
-        month[0] = 'D';month[1] = 'e';month[2] = 'c';
-    break;
-    }
-
-    unsigned char date[] = {month[0], month[1], month[2], ' ', day[0], day[1], 0x00};
-    unsigned char time[] = {hour[0], hour[1], ':', minute[0], minute[1], ':', second[0], second[1], 0x00};
-
-    Graphics_drawStringCentered(&g_sContext, date, AUTO_STRING_LENGTH, 48, 25, TRANSPARENT_TEXT);
-    Graphics_drawStringCentered(&g_sContext, time, AUTO_STRING_LENGTH, 48, 35, TRANSPARENT_TEXT);
 }
+
 
 void displayTemp(float inAvgTempC) {
-    float CToF = 33.8 * inAvgTempC;
+    int correctedC = (int)(inAvgTempC * 10);
+    tempC[0] = correctedC / 1000;
+    tempC[1] = (correctedC - (tempC[0] * 1000)) / 100;
+    tempC[2] = (correctedC - (tempC[1] * 100)) / 10;
+    tempC[3] = '.';
+    tempC[4] = inAvgTempC - (tempC[2] * 10);
+    Graphics_drawStringCentered(&g_sContext, (char)tempC, AUTO_STRING_LENGTH, 48, 25, TRANSPARENT_TEXT);
 
-    char tempC[] = {floor(inAvgTempC / 100.0) + 48,
-                    ((unsigned int)floor(inAvgTempC / 10.0) % 10) + 48,
-                    floor((unsigned int)inAvgTempC % 10) + 48,
-                    '.',
-                    ((int)floor(inAvgTempC * 10.0) % 10) + 48,
-                    ' ', 'C', 0x00};
+    int correctedF = (correctedC * 9 / 5) + 32;
+    tempF[0] = correctedF / 1000;
+    tempF[1] = (correctedF - (tempF[0] * 1000)) / 100;
+    tempF[2] = (correctedF - (tempF[1] * 100)) / 10;
+    tempF[3] = '.';
+    tempF[4] = correctedF - (tempF[2] * 10);
+    Graphics_drawStringCentered(&g_sContext, (char)tempF, AUTO_STRING_LENGTH, 48, 25, TRANSPARENT_TEXT);
 
-    char tempF[] = {floor(CToF / 100.0) + 30,
-                    ((unsigned int)floor(CToF / 10.0) % 10) + 48,
-                    ((unsigned int)CToF % 10) + 48, '.',
-                    (unsigned int)floor(CToF * 10.0) % 10 + 48,
-                    ' ', 'F', 0x00};
-
-    Graphics_drawStringCentered(&g_sContext, tempC, AUTO_STRING_LENGTH, 48, 45, TRANSPARENT_TEXT);
-    Graphics_drawStringCentered(&g_sContext, tempF, AUTO_STRING_LENGTH, 48, 55, TRANSPARENT_TEXT);
 }
+
 
 
