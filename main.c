@@ -14,12 +14,27 @@ void edit();
 void displayTime(long unsigned int seconds);
 void displayTemp(float inAvgTempC);
 
+#define ADCSIZE 36
+// Temperature Sensor Calibration = Reading at 30 degrees C is stored at addr 1A1Ah
+// See end of datasheet for TLV table memory mapping
+#define CALADC12_15V_30C  *((unsigned int *)0x1A1A)
+// Temperature Sensor Calibration = Reading at 85 degrees C is stored at addr 1A1Ch
+//See device datasheet for TLV table memory mapping
+#define CALADC12_15V_85C  *((unsigned int *)0x1A1C)
+
+#define degC_per_bit (float)((float)(85.0 - 30.0))/((float)(CALADC12_15V_85C-CALADC12_15V_30C))
+
 enum States{HOME, EDIT};
 int currentState = HOME;
-long unsigned int timeCount = 0;
+long unsigned int timeCount = (31 + 28 + 31 + 30 + 13) * 86400;
+bool update = false;
+float acdC[ADCSIZE];
+unsigned int adcIndex = 0;
+
 
 // MAIN
 void main(void) {
+
     WDTCTL = WDTPW | WDTHOLD;    // Stop watchdog timer. Always need to stop this!!
                                  // You can then configure it properly, if desired
 
@@ -30,6 +45,23 @@ void main(void) {
 
     // enables global interrupts
     _BIS_SR(GIE);
+
+
+    REFCTL0 &= ~REFMSTR;    // Reset REFMSTR to hand over control of
+                            // internal reference voltages to
+                            // ADC12_A control registers
+
+    ADC12CTL0 = ADC12SHT0_9 | ADC12REFON | ADC12ON;     // Internal ref = 1.5V
+
+    ADC12CTL1 = ADC12SHP;    // Enable sample timer
+
+    // Using ADC12MEM0 to store reading
+    ADC12MCTL0 = ADC12SREF_1 + ADC12INCH_10;    // ADC i/p ch A10 = temp sense
+                                                // ACD12SREF_1 = internal ref = 1.5v
+
+    __delay_cycles(100);                        // delay to allow Ref to settle
+
+    ADC12CTL0 |= ADC12ENC;                      // Enable conversion
 
     // setup for LEDs, LCD, Keypad, Buttons
     initLeds();
@@ -54,10 +86,41 @@ void main(void) {
 #pragma vector = TIMER2_A0_VECTOR
 __interrupt void Timer_A2_ISR(void) {
     timeCount++;
+    update = true;
 }
 
 void home() {
+    if (update) {
+        update = false;
 
+        ADC12CTL0 &= ~ADC12SC;      // clear the start bit
+        ADC12CTL0 |= ADC12SC;       // Sampling and conversion start
+                                    // Single conversion (single channel)
+
+        unsigned int adc = ADC12MEM0;
+
+        float temperatureDegC = (float) ( (long)adc - CALADC12_15V_30C) * degC_per_bit + 30.0;
+
+        acdC[adcIndex] = temperatureDegC;
+        adcIndex++;
+        if (adcIndex >= ADCSIZE) {
+            adcIndex = 0;
+        }
+
+        volatile int i;
+        volatile float avgC = 0;
+        for (i = 0; i < ADCSIZE; i++) {
+            avgC += acdC[i];
+        }
+        avgC = avgC / (float)ADCSIZE;
+
+        if (timeCount % 3 == 0) {
+            Graphics_clearDisplay(&g_sContext); // Clear the display
+            displayTime(timeCount);
+            displayTemp(avgC);
+            Graphics_flushBuffer(&g_sContext);
+        }
+    }
 }
 
 void edit() {
@@ -97,13 +160,13 @@ void displayTime(long unsigned int seconds) {
         else i = 12;
     }
 
-    char month[] = "Jan";
-    char day[] = {floor(days / 10) + 30, (days % 10) + 30};
-    char hour[] = {floor(hours / 10) + 30, (hours % 10) + 30};
-    char minute[] = {floor(minutes / 10) + 30, (minutes % 10) + 30};
-    char second[] = {floor(seconds / 10) + 30, (seconds % 10) + 30};
+    unsigned char month[] = {'J', 'a', 'n'};
+    unsigned char day[] = {floor(days / 10) + 48, (days % 10) + 48};
+    unsigned char hour[] = {floor(hours / 10) + 48, (hours % 10) + 48};
+    unsigned char minute[] = {floor(minutes / 10) + 48, (minutes % 10) + 48};
+    unsigned char second[] = {floor(seconds / 10) + 48, (seconds % 10) + 48};
 
-    switch (days) {
+    switch (months) {
     case 1:
         month[0] = 'F';month[1] = 'e';month[2] = 'b';
     break;
@@ -139,8 +202,8 @@ void displayTime(long unsigned int seconds) {
     break;
     }
 
-    char date[] = {month, ' ', day};
-    char time[] = {hour, ':', minute, ':', second};
+    unsigned char date[] = {month[0], month[1], month[2], ' ', day[0], day[1], 0x00};
+    unsigned char time[] = {hour[0], hour[1], ':', minute[0], minute[1], ':', second[0], second[1], 0x00};
 
     Graphics_drawStringCentered(&g_sContext, date, AUTO_STRING_LENGTH, 48, 25, TRANSPARENT_TEXT);
     Graphics_drawStringCentered(&g_sContext, time, AUTO_STRING_LENGTH, 48, 35, TRANSPARENT_TEXT);
@@ -149,10 +212,18 @@ void displayTime(long unsigned int seconds) {
 void displayTemp(float inAvgTempC) {
     float CToF = 33.8 * inAvgTempC;
 
-    float intermediate;
+    char tempC[] = {floor(inAvgTempC / 100.0) + 48,
+                    ((unsigned int)floor(inAvgTempC / 10.0) % 10) + 48,
+                    floor((unsigned int)inAvgTempC % 10) + 48,
+                    '.',
+                    ((int)floor(inAvgTempC * 10.0) % 10) + 48,
+                    ' ', 'C', 0x00};
 
-    char tempC[] = {floor(inAvgTempC / 100.0) + 30, (floor(inAvgTempC / 10.0) % 10) + 30, floor(inAvgTempC % 10) + 30, '.', floor(inAvgTempC * 10.0) % 10 + 30, ' ', 'C'};
-    char tempF[] = {floor(CToF / 100.0) + 30, (floor(CToF / 10.0) % 10) + 30, floor(CToF % 10) + 30, '.', floor(CToF * 10.0) % 10 + 30, ' ', 'F'};
+    char tempF[] = {floor(CToF / 100.0) + 30,
+                    ((unsigned int)floor(CToF / 10.0) % 10) + 48,
+                    ((unsigned int)CToF % 10) + 48, '.',
+                    (unsigned int)floor(CToF * 10.0) % 10 + 48,
+                    ' ', 'F', 0x00};
 
     Graphics_drawStringCentered(&g_sContext, tempC, AUTO_STRING_LENGTH, 48, 45, TRANSPARENT_TEXT);
     Graphics_drawStringCentered(&g_sContext, tempF, AUTO_STRING_LENGTH, 48, 55, TRANSPARENT_TEXT);
