@@ -9,9 +9,11 @@
 
 // PROTOTYPES
 __interrupt void Timer_A2_ISR(void);
-void states();
+long unsigned int timeToSeconds(long unsigned int month, long unsigned int day, long unsigned int hour, long unsigned int minute, long unsigned int second, bool leapYear);
 void home();
 void edit();
+void configButtons();
+char buttonStates();
 void displayTime(long unsigned int seconds);
 void displayTemp(float inAvgTempC);
 
@@ -29,15 +31,20 @@ enum States{HOME, EDIT};
 enum EditStates{MONTH, DAY, HOUR, MINUTE, SECOND};
 int currentState = HOME;
 int editState = MONTH;
-long unsigned int timeCount = (31 + 28 + 31 + 30 + 13) * 86400 - 60;
+long unsigned int timeCount;
 bool update = false;
+bool poll = false;
 float acdC[ADCSIZE];
 unsigned int adcIndex = 0;
 unsigned int ADCTemp, ADCPot;
+unsigned int editADCVal = 2048;
 
 
 // MAIN
 void main(void) {
+
+    timeCount = timeToSeconds(5, 12, 23, 59, 59, false);
+
     WDTCTL = WDTPW + WDTHOLD;                 // Stop WDT
 
     // timer A2 management
@@ -70,35 +77,56 @@ void main(void) {
     initLeds();
     configDisplay();
     configKeypad();
+    configButtons();
 
-    volatile bool firstReading = true;
+    volatile bool firstReading[] = {true, true};
 
     while(1) {
-        ADC12CTL0 &= ~ADC12SC;  // clear the start bit
+        /*ADC12CTL0 &= ~ADC12SC;  // clear the start bit
         ADC12CTL0 |= ADC12SC;               // Sampling and conversion start
         // Single conversion (single channel)
         // Poll busy bit waiting for conversion to complete
         while (ADC12CTL1 & ADC12BUSY) states();
-        ADCTemp = ADC12MEM0;
+        if (update) ADCTemp = ADC12MEM0;
+        ADCPot = ADC12MEM1;               // Read results if conversion done
         if (firstReading) {
             volatile int i;
             for (i = 0; i < ADCSIZE; i++) {
                 acdC[i] = (float)((long)ADCTemp - CALADC12_15V_30C) * degC_per_bit + 30.0;
             }
+            editADCVal = ADCPot;
+            firstReading = false;
         }
-        ADCPot = ADC12MEM1;               // Read results if conversion done
-        states();
-    }
-}
+        states();*/
 
-void states() {
-    switch (currentState) {
-    case HOME:
-        home();
-    break;
-    case EDIT:
-        edit();
-    break;
+        ADC12CTL0 &= ~ADC12SC;  // clear the start bit
+        ADC12CTL0 |= ADC12SC;               // Sampling and conversion start
+        if (ADC12IFG0 && poll) {
+            ADCTemp = ADC12MEM0;
+            if (firstReading[0]) {
+                volatile int i;
+                for (i = 0; i < ADCSIZE; i++) {
+                    acdC[i] = (float)((long)ADCTemp - CALADC12_15V_30C) * degC_per_bit + 30.0;
+                }
+                firstReading[0] = false;
+            }
+            poll = false;
+        }
+        if (ADC12IFG1) {
+            ADCPot = ADC12MEM1;               // Read results if conversion done
+            if (firstReading[1]) {
+                editADCVal = ADCPot;
+                firstReading[1] = false;
+            }
+        }
+        switch (currentState) {
+        case HOME:
+            home();
+        break;
+        case EDIT:
+            edit();
+        break;
+        }
     }
 }
 
@@ -109,7 +137,13 @@ __interrupt void Timer_A2_ISR(void) {
         timeCount++;
     }
     update = true;
+    poll = true;
 }
+
+/*#pragma vector = ADC12_VECTOR
+__interrupt void ADC12ISR(void) {
+    poll = true;
+}*/
 
 void home() {
     if (update) {
@@ -146,40 +180,107 @@ void edit() {
     }
 }
 
-unsigned int dataElement() {
-    if (currentState == EDIT) {
-        if (editState == MONTH || editState == DAY) {
-            return 1;
-        }
-        else {
-            return 2;
-        }
-    }
-    else if (timeCount % 12 <= 2) {
-        return 1;
-    }
-    else if (timeCount % 12 >= 3 && timeCount % 12 <= 5) {
-        return 2;
-    }
-    else if (timeCount % 12 >= 6 && timeCount % 12 <= 8) {
-        return 3;
-    }
-    else if (timeCount % 12 >= 9 && timeCount % 12 <= 11) {
-        return 4;
-    }
-    return 0;
+// BUTTON CONFIGURATION HELPER
+void configButtons() {
+    //Sets P2.2, P3.6, P7.0, and P7.4 to IO
+    P2SEL &= ~BIT2;
+    P3SEL &= ~BIT6;
+    P7SEL &= ~(BIT0 | BIT4);
+
+    //Sets P2.2, P3.6, P7.0, and P7.4 to input
+    P2DIR &= ~BIT2;
+    P3DIR &= ~BIT6;
+    P7DIR &= ~(BIT0 | BIT4);
+
+    //Sets pins to use pull up/down
+    P2REN |= BIT2;
+    P3REN |= BIT6;
+    P7REN |= (BIT0 | BIT4);
+
+    //Sets pins to pull up
+    P2OUT |= BIT2;
+    P3OUT |= BIT6;
+    P7OUT |= (BIT0 | BIT4);
 }
 
-void displayTime(long unsigned int seconds) {
-    unsigned int sec  = seconds % 60;
-    seconds -= sec;
-    unsigned int minutes = (seconds % 3600) / 60;
-    seconds -= minutes * 60;
-    unsigned int hours = (seconds % 86400) / 3600;
-    seconds -= hours * 3600;
-    unsigned int days = seconds / 86400;
+// BUTTON PRESS CHECKING HANDLER
+char buttonStates() {
+    char returnState = 0x00;
+    if ((P2IN & BIT2) == 0) {
+        returnState |= BIT2;
+    }
+    if ((P3IN & BIT6) == 0) {
+        returnState |= BIT1;
+    }
+    if ((P7IN & BIT0) == 0) {
+        returnState |= BIT0;
+    }
+    if ((P7IN & BIT4) == 0) {
+        returnState |= BIT3;
+    }
+    return returnState;
+}
 
-    unsigned int months = 0;
+char dataElement() {
+    if (currentState == EDIT) {
+        return BIT1 | BIT2;
+    }
+    //Comment out for demo
+    else if (currentState == HOME) {
+        return BIT1 | BIT2 | BIT3 | BIT4;
+    }
+    else if (timeCount % 12 <= 2) {
+        return BIT1;
+    }
+    else if (timeCount % 12 >= 3 && timeCount % 12 <= 5) {
+        return BIT2;
+    }
+    else if (timeCount % 12 >= 6 && timeCount % 12 <= 8) {
+        return BIT3;
+    }
+    else if (timeCount % 12 >= 9 && timeCount % 12 <= 11) {
+        return BIT4;
+    }
+    return 0x00;
+}
+
+long unsigned int timeToSeconds(long unsigned int month, long unsigned int day, long unsigned int hour, long unsigned int minute, long unsigned int second, bool leapYear) {
+    month--;
+    long unsigned int newTimeime = second + (minute) * 60 + (hour) * 3600 + (day) * 86400;
+    volatile int i;
+    for (i = 0; i < 12; i++) {
+        if (i >= month) {
+            i = 12;
+        }
+        else if (i == 0 || 2 || 4 || 6 || 7 || 9 || 11) {
+            newTimeime += 30 * 86400;
+        }
+        else if (i == 3 || 5 || 8 || 10) {
+            newTimeime += 29 * 86400;
+        }
+        else if (i == 1 && leapYear) {
+            newTimeime += 28 * 86400;
+        }
+        else if (i == 1 && !leapYear) {
+            newTimeime += 27 * 86400;
+        }
+        else {
+            i = 12;
+        }
+    }
+    return newTimeime;
+}
+
+void displayTime(long unsigned int time) {
+    long unsigned int seconds  = time % 60;
+    time -= seconds;
+    long unsigned int minutes = (time % 3600) / 60;
+    time -= minutes * 60;
+    long unsigned int hours = (time % 86400) / 3600;
+    time -= hours * 3600;
+    long unsigned int days = time / 86400;
+
+    long unsigned int months = 0;
     bool leapYear = false;
 
     volatile int i = 0;
@@ -200,11 +301,13 @@ void displayTime(long unsigned int seconds) {
             months++;
             days -= 28;
         }
-        else i = 12;
+        else {
+            i = 12;
+        }
     }
 
     int editorAdjust = 0, bounds = 0;
-    float conversionValue = ((float)ADCPot - 2048.0) / 2048.0;
+    float conversionValue = ((float)ADCPot - (float)editADCVal) / 2048.0;
     if (currentState == EDIT) {
         if (editState == MONTH) {
             editorAdjust = round(conversionValue * 6.0);
@@ -212,12 +315,12 @@ void displayTime(long unsigned int seconds) {
             bounds = 12;
         }
         else if (editState == DAY) {
-            editorAdjust = round(conversionValue * 15.5);
+            if (months == 0 || 2 || 4 || 6 || 7 || 9 || 11) bounds = 30;
+            else if (months == 3 || 5 || 8 || 10) bounds = 29;
+            else if (months == 1 && leapYear) bounds = 28;
+            else if (months == 1 && !leapYear) bounds = 27;
+            editorAdjust = round(conversionValue * (float)bounds / 2.0);
             editorAdjust += (int)days;
-            if (months == 0 || 2 || 4 ||6 ||7 ||9 || 11) bounds = 31;
-            else if (months == 3 || 5 || 8 ||10) bounds = 30;
-            else if (months == 1 && leapYear) bounds = 29;
-            else if (months == 1 && !leapYear) bounds = 28;
         }
         else if (editState == HOUR) {
             editorAdjust = round(conversionValue * 12.0);
@@ -227,31 +330,52 @@ void displayTime(long unsigned int seconds) {
         else if (editState == MINUTE || SECOND) {
             editorAdjust = round(conversionValue * 30.0);
             if (editState == MINUTE) editorAdjust += (int)minutes;
-            else editorAdjust += (int)sec;
+            else editorAdjust += (int)seconds;
             bounds = 60;
         }
     }
 
-    if (editorAdjust >= bounds) {
-        editorAdjust -= bounds;
-    }
-    else if (editorAdjust < 0) {
-        editorAdjust += bounds;
+    if (currentState == EDIT) {
+        while (editorAdjust >= bounds) {
+            editorAdjust -= bounds;
+        }
+        while (editorAdjust < 0) {
+            editorAdjust += bounds;
+        }
+
+        if (editState == MONTH) months = (long unsigned int)editorAdjust;
+        else if (editState == DAY) days = (long unsigned int)editorAdjust;
+        else if (editState == HOUR) hours = (long unsigned int)editorAdjust;
+        else if (editState == MINUTE) minutes = (long unsigned int)editorAdjust;
+        else seconds = (long unsigned int)editorAdjust;
     }
 
-    if (currentState == EDIT) {
-        if (editState == MONTH) months = editorAdjust;
-        else if (editState == DAY) days = editorAdjust;
-        else if (editState == HOUR) hours = editorAdjust;
-        else if (editState == MINUTE) minutes = editorAdjust;
-        else sec = editorAdjust;
+    char buttons = buttonStates();
+
+    if (buttons & BIT0 && currentState != EDIT) {
+        editState = MONTH;
+        editADCVal = ADCPot;
+        currentState = EDIT;
+    }
+    else if (buttons & BIT0 || (buttons & BIT3 && currentState == EDIT)) {
+        timeCount = timeToSeconds(months+1, days, hours, minutes, seconds, leapYear);
+        if (editState == SECOND) {
+            editState = MONTH;
+        }
+        else {
+            editState++;
+        }
+        editADCVal = ADCPot;
+        if (buttons & BIT3) {
+            currentState = HOME;
+        }
     }
 
     char month[] = {'J', 'a', 'n'};
     char day[] = {floor(days / 10) + 48, (days % 10) + 48};
     char hour[] = {floor(hours / 10) + 48, (hours % 10) + 48};
     char minute[] = {floor(minutes / 10) + 48, (minutes % 10) + 48};
-    char second[] = {floor(sec / 10) + 48, (sec % 10) + 48};
+    char second[] = {floor(seconds / 10) + 48, (seconds % 10) + 48};
 
     switch (months) {
     case 1:
@@ -290,31 +414,36 @@ void displayTime(long unsigned int seconds) {
     }
 
     char date[] = {month[0], month[1], month[2], ' ', day[0], day[1], 0x00};
-    char time[] = {hour[0], hour[1], ':', minute[0], minute[1], ':', second[0], second[1], 0x00};
+    char clock[] = {hour[0], hour[1], ':', minute[0], minute[1], ':', second[0], second[1], 0x00};
 
     if (currentState == EDIT) {
         if (editState == HOUR) {
-            Graphics_drawStringCentered(&g_sContext, "__      ", AUTO_STRING_LENGTH, 48, 47, TRANSPARENT_TEXT);
+            Graphics_drawStringCentered(&g_sContext, "__      ", AUTO_STRING_LENGTH, 48, 52, TRANSPARENT_TEXT);
         }
         else if (editState == MINUTE) {
-            Graphics_drawStringCentered(&g_sContext, "   __   ", AUTO_STRING_LENGTH, 48, 47, TRANSPARENT_TEXT);
+            Graphics_drawStringCentered(&g_sContext, "   __   ", AUTO_STRING_LENGTH, 48, 52, TRANSPARENT_TEXT);
         }
         else if (editState == SECOND) {
-            Graphics_drawStringCentered(&g_sContext, "      __", AUTO_STRING_LENGTH, 48, 47, TRANSPARENT_TEXT);
+            Graphics_drawStringCentered(&g_sContext, "      __", AUTO_STRING_LENGTH, 48, 52, TRANSPARENT_TEXT);
         }
         else if (editState == MONTH) {
-            Graphics_drawStringCentered(&g_sContext, "___   ", AUTO_STRING_LENGTH, 48, 47, TRANSPARENT_TEXT);
+            Graphics_drawStringCentered(&g_sContext, "___   ", AUTO_STRING_LENGTH, 48, 42, TRANSPARENT_TEXT);
         }
         else if (editState == DAY) {
-            Graphics_drawStringCentered(&g_sContext, "    __", AUTO_STRING_LENGTH, 48, 47, TRANSPARENT_TEXT);
+            Graphics_drawStringCentered(&g_sContext, "    __", AUTO_STRING_LENGTH, 48, 42, TRANSPARENT_TEXT);
         }
     }
 
-    if (dataElement() == 1) {
-        Graphics_drawStringCentered(&g_sContext, date, AUTO_STRING_LENGTH, 48, 45, TRANSPARENT_TEXT);
+    int dataY = 25;
+    if (currentState == EDIT) {
+        dataY = 40;
     }
-    else if (dataElement() == 2) {
-        Graphics_drawStringCentered(&g_sContext, time, AUTO_STRING_LENGTH, 48, 45, TRANSPARENT_TEXT);
+
+    if (dataElement() & BIT1) {
+        Graphics_drawStringCentered(&g_sContext, date, AUTO_STRING_LENGTH, 48, dataY, TRANSPARENT_TEXT);
+    }
+    if ((dataElement() & BIT2) == BIT2) {
+        Graphics_drawStringCentered(&g_sContext, clock, AUTO_STRING_LENGTH, 48, dataY + 10, TRANSPARENT_TEXT);
     }
 
 }
@@ -335,11 +464,11 @@ void displayTemp(float inAvgTempC) {
                     (unsigned int)floor(CToF * 10.0) % 10 + 48,
                     ' ', 'F', 0x00};
 
-    if (dataElement() == 3) {
+    if ((dataElement() & BIT3) == BIT3) {
         Graphics_drawStringCentered(&g_sContext, tempC, AUTO_STRING_LENGTH, 48, 45, TRANSPARENT_TEXT);
     }
-    else if (dataElement() == 4) {
-        Graphics_drawStringCentered(&g_sContext, tempF, AUTO_STRING_LENGTH, 48, 45, TRANSPARENT_TEXT);
+    if ((dataElement() & BIT4) == BIT4) {
+        Graphics_drawStringCentered(&g_sContext, tempF, AUTO_STRING_LENGTH, 48, 55, TRANSPARENT_TEXT);
     }
 }
 
