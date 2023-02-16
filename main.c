@@ -9,6 +9,7 @@
 
 // PROTOTYPES
 __interrupt void Timer_A2_ISR(void);
+void states();
 void home();
 void edit();
 void displayTime(long unsigned int seconds);
@@ -25,116 +26,88 @@ void displayTemp(float inAvgTempC);
 #define degC_per_bit (float)((float)(85.0 - 30.0))/((float)(CALADC12_15V_85C-CALADC12_15V_30C))
 
 enum States{HOME, EDIT};
-int currentState = HOME;
+enum EditStates{HOURS, MINUTES, SECONDS};
+int currentState = EDIT;
+int editState = HOURS;
 long unsigned int timeCount = (31 + 28 + 31 + 30 + 13) * 86400 - 60;
 bool update = false;
 float acdC[ADCSIZE];
 unsigned int adcIndex = 0;
+unsigned int ADCTemp, ADCPot;
 
 
 // MAIN
 void main(void) {
-
-    WDTCTL = WDTPW | WDTHOLD;    // Stop watchdog timer. Always need to stop this!!
-                                 // You can then configure it properly, if desired
+    WDTCTL = WDTPW + WDTHOLD;                 // Stop WDT
 
     // timer A2 management
-    TA2CTL = TASSEL_1 + ID_0 + MC_1; // 32786 Hz is set
-    TA2CCR0 = 32785; // sets interrupt to occur every (TA2CCR0 + 1)/32786 seconds
-    TA2CCTL0 = CCIE; // enables TA2CCR0 interrupt
+        TA2CTL = TASSEL_1 + ID_0 + MC_1; // 32786 Hz is set
+        TA2CCR0 = 32785; // sets interrupt to occur every (TA2CCR0 + 1)/32786 seconds
+        TA2CCTL0 = CCIE; // enables TA2CCR0 interrupt
 
-    // enables global interrupts
-    _BIS_SR(GIE);
+        // enables global interrupts
+        _BIS_SR(GIE);
 
+    // Configure P8.0 as digital IO output and set it to 1
+    // This supplied 3.3 volts across scroll wheel potentiometer
+    // See schematic at end or MSP-EXP430F5529 board users guide
+    P6SEL &= ~BIT0;
+    REFCTL0 &= ~REFMSTR;                      // Reset REFMSTR to hand over control
+    // internal reference voltages to
+    // ADC12_A control registers
+    ADC12CTL0 = ADC12SHT0_9 | ADC12ON | ADC12MSC | ADC12REFON;
 
-    REFCTL0 &= ~REFMSTR;    // Reset REFMSTR to hand over control of
-                            // internal reference voltages to
-                            // ADC12_A control registers
+    ADC12CTL1 =  ADC12SHP + ADC12CONSEQ_1;                     // Enable sample timer
 
-    ADC12CTL0 = ADC12SHT0_9 | ADC12REFON | ADC12ON;     // Internal ref = 1.5V
-
-    ADC12CTL1 = ADC12SHP;    // Enable sample timer
-
-    // Using ADC12MEM0 to store reading
     ADC12MCTL0 = ADC12SREF_1 + ADC12INCH_10;    // ADC i/p ch A10 = temp sense
-                                                // ACD12SREF_1 = internal ref = 1.5v
-
-    __delay_cycles(100);                        // delay to allow Ref to settle
-
-    ADC12CTL0 |= ADC12ENC;                      // Enable conversion
+    // Use ADC12MEM0 register for conversion results
+    ADC12MCTL1 = ADC12SREF_0 + ADC12INCH_0 + ADC12EOS;   // ADC12INCH5 = Scroll wheel = A0
+    // ACD12SREF_0 = Vref+ = Vcc
+    __delay_cycles(100);                      // delay to allow Ref to settle
+    ADC12CTL0 |= ADC12ENC | ADC12SC;     // Enable conversion
 
     // setup for LEDs, LCD, Keypad, Buttons
     initLeds();
     configDisplay();
     configKeypad();
 
-    volatile int i;
-    for (i = 0; i < ADCSIZE; i++) {
-        acdC[i] = 0;
-    }
+    volatile bool firstReading = true;
 
-    // state machine
-    while (1) {
-        char key = getKey();
-        switch (currentState) {
-        case HOME:
-            home();
-        break;
-        case EDIT:
-            edit();
-        break;
-        }
-    }
-
-
-/*
-      WDTCTL = WDTPW + WDTHOLD;      // Stop WDT
-
-      REFCTL0 &= ~REFMSTR;    // Reset REFMSTR to hand over control of
-                              // internal reference voltages to
-               // ADC12_A control registers
-
-      ADC12CTL0 = ADC12SHT0_9 | ADC12REFON | ADC12ON;     // Internal ref = 1.5V
-
-      ADC12CTL1 = ADC12SHP;                     // Enable sample timer
-
-      // Using ADC12MEM0 to store reading
-      ADC12MCTL0 = ADC12SREF_1 + ADC12INCH_10;  // ADC i/p ch A10 = temp sense
-                                           // ACD12SREF_1 = internal ref = 1.5v
-      __delay_cycles(100);                    // delay to allow Ref to settle
-      ADC12CTL0 |= ADC12ENC;              // Enable conversion
-
-      while(1)
-      {
+    while(1) {
         ADC12CTL0 &= ~ADC12SC;  // clear the start bit
-        ADC12CTL0 |= ADC12SC;       // Sampling and conversion start
-                 // Single conversion (single channel)
+        ADC12CTL0 |= ADC12SC;               // Sampling and conversion start
+        // Single conversion (single channel)
         // Poll busy bit waiting for conversion to complete
-        while (ADC12CTL1 & ADC12BUSY)
-         __no_operation();
-        unsigned int in_temp = ADC12MEM0;      // Read in results if conversion
-        // Temperature in Celsius. See the Device Descriptor Table section in the
-        // System Resets, Interrupts, and Operating Modes, System Control Module
-        // chapter in the device user's guide for background information on the
-        // used formula.
-        float temperatureDegC = (float)((long)in_temp - CALADC12_15V_30C) * degC_per_bit
-    +30.0;
-        // Temperature in Fahrenheit Tf = (9/5)*Tc + 32
-        float temperatureDegF = temperatureDegC * 9.0/5.0 + 32.0;
+        while (ADC12CTL1 & ADC12BUSY) states();
+        ADCTemp = ADC12MEM0;
+        if (firstReading) {
+            volatile int i;
+            for (i = 0; i < ADCSIZE; i++) {
+                acdC[i] = (float)((long)ADCTemp - CALADC12_15V_30C) * degC_per_bit + 30.0;
+            }
+        }
+        ADCPot = ADC12MEM1;               // Read results if conversion done
+        states();
+    }
+}
 
-        Graphics_clearDisplay(&g_sContext); // Clear the display
-        displayTemp(temperatureDegC);
-        Graphics_flushBuffer(&g_sContext);
-
-        __no_operation();                       // SET BREAKPOINT HERE
-      }
-*/
+void states() {
+    switch (currentState) {
+    case HOME:
+        home();
+    break;
+    case EDIT:
+        edit();
+    break;
+    }
 }
 
 // TIMER INTERRUPT
 #pragma vector = TIMER2_A0_VECTOR
 __interrupt void Timer_A2_ISR(void) {
-    timeCount++;
+    if (currentState != EDIT) {
+        timeCount++;
+    }
     update = true;
 }
 
@@ -142,14 +115,7 @@ void home() {
     if (update) {
         update = false;
 
-        ADC12CTL0 &= ~ADC12SC;      // clear the start bit
-        ADC12CTL0 |= ADC12SC;       // Sampling and conversion start
-                                    // Single conversion (single channel)
-
-        unsigned int adc = ADC12MEM0;
-
-
-        float temperatureDegC = (float)((long)adc - CALADC12_15V_30C) * degC_per_bit + 30.0;
+        float temperatureDegC = (float)((long)ADCTemp - CALADC12_15V_30C) * degC_per_bit + 30.0;
 
         acdC[adcIndex] = temperatureDegC;
         adcIndex++;
@@ -164,17 +130,39 @@ void home() {
         }
         avgC = avgC / (float)ADCSIZE;
 
-        if (timeCount % 3 == 0) {
-            Graphics_clearDisplay(&g_sContext); // Clear the display
-            displayTime(timeCount);
-            displayTemp(avgC);
-            Graphics_flushBuffer(&g_sContext);
-        }
+        Graphics_clearDisplay(&g_sContext); // Clear the display
+        displayTime(timeCount);
+        displayTemp(avgC);
+        Graphics_flushBuffer(&g_sContext);
     }
 }
 
 void edit() {
+    if (update) {
+        update = false;
+        Graphics_clearDisplay(&g_sContext); // Clear the display
+        displayTime(timeCount);
+        Graphics_flushBuffer(&g_sContext);
+    }
+}
 
+unsigned int dataElement() {
+    if (currentState == EDIT) {
+        return 2;
+    }
+    else if (timeCount % 12 <= 2) {
+        return 1;
+    }
+    else if (timeCount % 12 >= 3 && timeCount % 12 <= 5) {
+        return 2;
+    }
+    else if (timeCount % 12 >= 6 && timeCount % 12 <= 8) {
+        return 3;
+    }
+    else if (timeCount % 12 >= 9 && timeCount % 12 <= 11) {
+        return 4;
+    }
+    return 0;
 }
 
 void displayTime(long unsigned int seconds) {
@@ -255,43 +243,49 @@ void displayTime(long unsigned int seconds) {
     char date[] = {month[0], month[1], month[2], ' ', day[0], day[1], 0x00};
     char time[] = {hour[0], hour[1], ':', minute[0], minute[1], ':', second[0], second[1], 0x00};
 
-    Graphics_drawStringCentered(&g_sContext, date, AUTO_STRING_LENGTH, 48, 25, TRANSPARENT_TEXT);
-    Graphics_drawStringCentered(&g_sContext, time, AUTO_STRING_LENGTH, 48, 35, TRANSPARENT_TEXT);
+    if (currentState == EDIT) {
+        if (editState == HOURS) {
+            Graphics_drawStringCentered(&g_sContext, "__      ", AUTO_STRING_LENGTH, 48, 47, TRANSPARENT_TEXT);
+        }
+        else if (editState == MINUTES) {
+            Graphics_drawStringCentered(&g_sContext, "   __   ", AUTO_STRING_LENGTH, 48, 47, TRANSPARENT_TEXT);
+        }
+        else if (editState == SECONDS) {
+            Graphics_drawStringCentered(&g_sContext, "      __", AUTO_STRING_LENGTH, 48, 47, TRANSPARENT_TEXT);
+        }
+    }
+
+    if (dataElement() == 1) {
+        Graphics_drawStringCentered(&g_sContext, date, AUTO_STRING_LENGTH, 48, 45, TRANSPARENT_TEXT);
+    }
+    else if (dataElement() == 2) {
+        Graphics_drawStringCentered(&g_sContext, time, AUTO_STRING_LENGTH, 48, 45, TRANSPARENT_TEXT);
+    }
+
 }
 
 void displayTemp(float inAvgTempC) {
     float CToF = inAvgTempC * 9.0/5.0 + 32.0;
 
-    char MSBC, MSBF;
-    if (inAvgTempC < 0) {
-        MSBC = '-';
-    }
-    else {
-        MSBC = floor(inAvgTempC / 100.0) + 48;
-    }
-    if (CToF < 0) {
-        MSBF = '-';
-    }
-    else {
-        MSBF = floor(CToF / 100.0) + 48;
-    }
-
-    char tempC[] = {MSBC,
+    char tempC[] = {floor(inAvgTempC / 100.0) + 48,
                     ((unsigned int)floor(inAvgTempC / 10.0) % 10) + 48,
                     floor((unsigned int)inAvgTempC % 10) + 48,
                     '.',
                     ((int)floor(inAvgTempC * 10.0) % 10) + 48,
                     ' ', 'C', 0x00};
 
-    char tempF[] = {MSBF,
+    char tempF[] = {floor(CToF / 100.0) + 48,
                     ((unsigned int)floor(CToF / 10.0) % 10) + 48,
                     ((unsigned int)CToF % 10) + 48, '.',
                     (unsigned int)floor(CToF * 10.0) % 10 + 48,
                     ' ', 'F', 0x00};
 
-
-    Graphics_drawStringCentered(&g_sContext, tempC, AUTO_STRING_LENGTH, 48, 45, TRANSPARENT_TEXT);
-    Graphics_drawStringCentered(&g_sContext, tempF, AUTO_STRING_LENGTH, 48, 55, TRANSPARENT_TEXT);
+    if (dataElement() == 3) {
+        Graphics_drawStringCentered(&g_sContext, tempC, AUTO_STRING_LENGTH, 48, 45, TRANSPARENT_TEXT);
+    }
+    else if (dataElement() == 4) {
+        Graphics_drawStringCentered(&g_sContext, tempF, AUTO_STRING_LENGTH, 48, 45, TRANSPARENT_TEXT);
+    }
 }
 
 
