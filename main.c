@@ -26,9 +26,9 @@ void displayTemp(float inAvgTempC);
 #define degC_per_bit (float)((float)(85.0 - 30.0))/((float)(CALADC12_15V_85C-CALADC12_15V_30C))
 
 enum States{HOME, EDIT};
-enum EditStates{HOURS, MINUTES, SECONDS};
-int currentState = EDIT;
-int editState = HOURS;
+enum EditStates{MONTH, DAY, HOUR, MINUTE, SECOND};
+int currentState = HOME;
+int editState = MONTH;
 long unsigned int timeCount = (31 + 28 + 31 + 30 + 13) * 86400 - 60;
 bool update = false;
 float acdC[ADCSIZE];
@@ -148,7 +148,12 @@ void edit() {
 
 unsigned int dataElement() {
     if (currentState == EDIT) {
-        return 2;
+        if (editState == MONTH || editState == DAY) {
+            return 1;
+        }
+        else {
+            return 2;
+        }
     }
     else if (timeCount % 12 <= 2) {
         return 1;
@@ -198,6 +203,50 @@ void displayTime(long unsigned int seconds) {
         else i = 12;
     }
 
+    int editorAdjust = 0, bounds = 0;
+    float conversionValue = ((float)ADCPot - 2048.0) / 2048.0;
+    if (currentState == EDIT) {
+        if (editState == MONTH) {
+            editorAdjust = round(conversionValue * 6.0);
+            editorAdjust += (int)months;
+            bounds = 12;
+        }
+        else if (editState == DAY) {
+            editorAdjust = round(conversionValue * 15.5);
+            editorAdjust += (int)days;
+            if (months == 0 || 2 || 4 ||6 ||7 ||9 || 11) bounds = 31;
+            else if (months == 3 || 5 || 8 ||10) bounds = 30;
+            else if (months == 1 && leapYear) bounds = 29;
+            else if (months == 1 && !leapYear) bounds = 28;
+        }
+        else if (editState == HOUR) {
+            editorAdjust = round(conversionValue * 12.0);
+            editorAdjust += (int)hours;
+            bounds = 24;
+        }
+        else if (editState == MINUTE || SECOND) {
+            editorAdjust = round(conversionValue * 30.0);
+            if (editState == MINUTE) editorAdjust += (int)minutes;
+            else editorAdjust += (int)sec;
+            bounds = 60;
+        }
+    }
+
+    if (editorAdjust >= bounds) {
+        editorAdjust -= bounds;
+    }
+    else if (editorAdjust < 0) {
+        editorAdjust += bounds;
+    }
+
+    if (currentState == EDIT) {
+        if (editState == MONTH) months = editorAdjust;
+        else if (editState == DAY) days = editorAdjust;
+        else if (editState == HOUR) hours = editorAdjust;
+        else if (editState == MINUTE) minutes = editorAdjust;
+        else sec = editorAdjust;
+    }
+
     char month[] = {'J', 'a', 'n'};
     char day[] = {floor(days / 10) + 48, (days % 10) + 48};
     char hour[] = {floor(hours / 10) + 48, (hours % 10) + 48};
@@ -244,14 +293,20 @@ void displayTime(long unsigned int seconds) {
     char time[] = {hour[0], hour[1], ':', minute[0], minute[1], ':', second[0], second[1], 0x00};
 
     if (currentState == EDIT) {
-        if (editState == HOURS) {
+        if (editState == HOUR) {
             Graphics_drawStringCentered(&g_sContext, "__      ", AUTO_STRING_LENGTH, 48, 47, TRANSPARENT_TEXT);
         }
-        else if (editState == MINUTES) {
+        else if (editState == MINUTE) {
             Graphics_drawStringCentered(&g_sContext, "   __   ", AUTO_STRING_LENGTH, 48, 47, TRANSPARENT_TEXT);
         }
-        else if (editState == SECONDS) {
+        else if (editState == SECOND) {
             Graphics_drawStringCentered(&g_sContext, "      __", AUTO_STRING_LENGTH, 48, 47, TRANSPARENT_TEXT);
+        }
+        else if (editState == MONTH) {
+            Graphics_drawStringCentered(&g_sContext, "___   ", AUTO_STRING_LENGTH, 48, 47, TRANSPARENT_TEXT);
+        }
+        else if (editState == DAY) {
+            Graphics_drawStringCentered(&g_sContext, "    __", AUTO_STRING_LENGTH, 48, 47, TRANSPARENT_TEXT);
         }
     }
 
