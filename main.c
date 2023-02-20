@@ -17,7 +17,8 @@ char buttonStates();
 void displayTime(long unsigned int seconds);
 void displayTemp(float inAvgTempC);
 
-#define ADCSIZE 36
+//Stores the amount of temperatures to store
+#define POTSIZE 36
 // Temperature Sensor Calibration = Reading at 30 degrees C is stored at addr 1A1Ah
 // See end of datasheet for TLV table memory mapping
 #define CALADC12_15V_30C  *((unsigned int *)0x1A1A)
@@ -27,22 +28,34 @@ void displayTemp(float inAvgTempC);
 
 #define degC_per_bit (float)((float)(85.0 - 30.0))/((float)(CALADC12_15V_85C-CALADC12_15V_30C))
 
+//Stores operating states of the program
 enum States{HOME, EDIT};
+//Stores editing states of the program
 enum EditStates{MONTH, DAY, HOUR, MINUTE, SECOND};
+//Stores the current program state
 int currentState = HOME;
+//Stores the current editing state
 int editState = MONTH;
+//Stores the amount of seconds corresponding to the amount of time passed
 long unsigned int timeCount;
+//Boolean for whether to update each second
 bool update = false;
+//Boolean for whether to update the temperature reading
 bool poll = false;
-float acdC[ADCSIZE];
+//Used to store last 36 temperature readings
+float avgTempC[POTSIZE];
+//Stores the index used to add a new value to avgTempC
 unsigned int adcIndex = 0;
+//Stores the last read adc values for the temperature and potentiometer sensor
 unsigned int ADCTemp, ADCPot;
+//Used to store potentiometer value when switching editing states
 unsigned int editADCVal = 2048;
 
 
 // MAIN
 void main(void) {
 
+    //Initializes timeCount to May 12th, 23:59:59
     timeCount = timeToSeconds(5, 12, 23, 59, 59, false);
 
     WDTCTL = WDTPW + WDTHOLD;                 // Stop WDT
@@ -79,46 +92,40 @@ void main(void) {
     configKeypad();
     configButtons();
 
+    //Stores boolean for testing first readings for temperature and potentiometer adcs
     volatile bool firstReading[] = {true, true};
 
     while(1) {
-        /*ADC12CTL0 &= ~ADC12SC;  // clear the start bit
-        ADC12CTL0 |= ADC12SC;               // Sampling and conversion start
-        // Single conversion (single channel)
-        // Poll busy bit waiting for conversion to complete
-        while (ADC12CTL1 & ADC12BUSY) states();
-        if (update) ADCTemp = ADC12MEM0;
-        ADCPot = ADC12MEM1;               // Read results if conversion done
-        if (firstReading) {
-            volatile int i;
-            for (i = 0; i < ADCSIZE; i++) {
-                acdC[i] = (float)((long)ADCTemp - CALADC12_15V_30C) * degC_per_bit + 30.0;
-            }
-            editADCVal = ADCPot;
-            firstReading = false;
-        }
-        states();*/
+        //clear the start bit
+        ADC12CTL0 &= ~ADC12SC;
+        //Sampling and conversion start
+        ADC12CTL0 |= ADC12SC;
 
-        ADC12CTL0 &= ~ADC12SC;  // clear the start bit
-        ADC12CTL0 |= ADC12SC;               // Sampling and conversion start
+        //Checks if the temperature interrupt is raised and if a second has passed
         if (ADC12IFG0 && poll) {
+            //Stored adc value
             ADCTemp = ADC12MEM0;
+            //Runs if this is first temperature reading
             if (firstReading[0]) {
                 volatile int i;
-                for (i = 0; i < ADCSIZE; i++) {
-                    acdC[i] = (float)((long)ADCTemp - CALADC12_15V_30C) * degC_per_bit + 30.0;
+                //Sets the previous 36 readings to first reading
+                for (i = 0; i < POTSIZE; i++) {
+                    avgTempC[i] = (float)((long)ADCTemp - CALADC12_15V_30C) * degC_per_bit + 30.0;
                 }
+                //Sets first reading to false
                 firstReading[0] = false;
             }
             poll = false;
         }
+        //checks if potentiometer interrupt is raised
         if (ADC12IFG1) {
-            ADCPot = ADC12MEM1;               // Read results if conversion done
+            ADCPot = ADC12MEM1;
             if (firstReading[1]) {
                 editADCVal = ADCPot;
                 firstReading[1] = false;
             }
         }
+        //Switches between current states
         switch (currentState) {
         case HOME:
             home();
@@ -133,47 +140,56 @@ void main(void) {
 // TIMER INTERRUPT
 #pragma vector = TIMER2_A0_VECTOR
 __interrupt void Timer_A2_ISR(void) {
+    //Increments timeCount if not in editing mode
     if (currentState != EDIT) {
         timeCount++;
     }
+    //Sets update to true to update screen
     update = true;
+    //Sets poll to true to update temperature reading
     poll = true;
 }
 
-/*#pragma vector = ADC12_VECTOR
-__interrupt void ADC12ISR(void) {
-    poll = true;
-}*/
-
+//Home state
 void home() {
     if (update) {
         update = false;
 
+        //Calculates the temperature in degrees C from most recent adc value
         float temperatureDegC = (float)((long)ADCTemp - CALADC12_15V_30C) * degC_per_bit + 30.0;
 
-        acdC[adcIndex] = temperatureDegC;
+        //Replaces the oldest reading with the newest
+        avgTempC[adcIndex] = temperatureDegC;
+        //Increments index for new temperature readings
         adcIndex++;
-        if (adcIndex >= ADCSIZE) {
+        //Sets index to 0 if over the maximum size
+        if (adcIndex >= POTSIZE) {
             adcIndex = 0;
         }
 
         volatile int i;
         volatile float avgC = 0;
-        for (i = 0; i < ADCSIZE; i++) {
-            avgC += acdC[i];
+        //Sums all the previous temperature readings
+        for (i = 0; i < POTSIZE; i++) {
+            avgC += avgTempC[i];
         }
-        avgC = avgC / (float)ADCSIZE;
+        //Averages the temperature radings
+        avgC = avgC / (float)POTSIZE;
 
-        Graphics_clearDisplay(&g_sContext); // Clear the display
+        //Writes the date or temperature to the display
+        Graphics_clearDisplay(&g_sContext);
         displayTime(timeCount);
         displayTemp(avgC);
         Graphics_flushBuffer(&g_sContext);
     }
 }
 
+//Edit state
 void edit() {
+    //Runs if 1 second has passed
     if (update) {
         update = false;
+        //Writes date in editing mode to display
         Graphics_clearDisplay(&g_sContext); // Clear the display
         displayTime(timeCount);
         Graphics_flushBuffer(&g_sContext);
@@ -221,33 +237,43 @@ char buttonStates() {
     return returnState;
 }
 
+//Returns bit for printing display elements
 char dataElement() {
+    //Prints date and time if in edit mode
     if (currentState == EDIT) {
         return BIT1 | BIT2;
     }
-    //Comment out for demo
-    else if (currentState == HOME) {
+    //Used for debugging
+    /*else if (currentState == HOME) {
         return BIT1 | BIT2 | BIT3 | BIT4;
-    }
+    }*/
+    //Prints date
     else if (timeCount % 12 <= 2) {
         return BIT1;
     }
+    //Prints time
     else if (timeCount % 12 >= 3 && timeCount % 12 <= 5) {
         return BIT2;
     }
+    //Prints temperature in C
     else if (timeCount % 12 >= 6 && timeCount % 12 <= 8) {
         return BIT3;
     }
+    //Prints temperature in F
     else if (timeCount % 12 >= 9 && timeCount % 12 <= 11) {
         return BIT4;
     }
     return 0x00;
 }
 
+//Converts date and time into seconds
 long unsigned int timeToSeconds(long unsigned int month, long unsigned int day, long unsigned int hour, long unsigned int minute, long unsigned int second, bool leapYear) {
+    //Subtracts 1 since months start at 0
     month--;
-    long unsigned int newTimeime = second + (minute) * 60 + (hour) * 3600 + (day) * 86400;
+    //Adds time from seconds, minutes, hours, and days
+    long unsigned int newTimeime = second + minute * 60 + hour * 3600 + day * 86400;
     volatile int i;
+    //Adds time based on the amount of days in the month up to the selected month
     for (i = 0; i < 12; i++) {
         if (i >= month) {
             i = 12;
@@ -271,7 +297,9 @@ long unsigned int timeToSeconds(long unsigned int month, long unsigned int day, 
     return newTimeime;
 }
 
+//Displays the date and time
 void displayTime(long unsigned int time) {
+    //Calculates the time in seconds, minutes, hours, and days
     long unsigned int seconds  = time % 60;
     time -= seconds;
     long unsigned int minutes = (time % 3600) / 60;
@@ -279,10 +307,12 @@ void displayTime(long unsigned int time) {
     long unsigned int hours = (time % 86400) / 3600;
     time -= hours * 3600;
     long unsigned int days = time / 86400;
-
     long unsigned int months = 0;
+
+    //Stores whether or not current year is a leap year
     bool leapYear = false;
 
+    //Removes days for each month and adds it to month count until inputted month is reached
     volatile int i = 0;
     for (i = 0; i < 12; i++) {
         if ((i == 0 || i == 2 || i == 4 || i == 6 || i == 7 || i == 9 || i == 11) && days >= 31) {
@@ -306,14 +336,22 @@ void displayTime(long unsigned int time) {
         }
     }
 
-    int editorAdjust = 0, bounds = 0;
+    //Stores adjusted value if in edit mode
+    int editorAdjust = 0;
+    //Stores half of the upper bounds value based on the editing state
+    int bounds = 0;
+    //Stores int value of potentiometer based on the current reading minus the previous state adc reading
+    //This keeps the value of the adjustment 0 when switching between editing states
     float conversionValue = ((float)ADCPot - (float)editADCVal) / 2048.0;
+    //Sets bounds if in editing state
     if (currentState == EDIT) {
+        //Sets bounds for month
         if (editState == MONTH) {
             editorAdjust = round(conversionValue * 6.0);
             editorAdjust += (int)months;
             bounds = 12;
         }
+        //Sets bounds for day depending on the current month
         else if (editState == DAY) {
             if (months == 0 || 2 || 4 || 6 || 7 || 9 || 11) bounds = 30;
             else if (months == 3 || 5 || 8 || 10) bounds = 29;
@@ -322,11 +360,13 @@ void displayTime(long unsigned int time) {
             editorAdjust = round(conversionValue * (float)bounds / 2.0);
             editorAdjust += (int)days;
         }
+        //Sets bounds for hour
         else if (editState == HOUR) {
             editorAdjust = round(conversionValue * 12.0);
             editorAdjust += (int)hours;
             bounds = 24;
         }
+        //Sets bounds for minutes and seconds
         else if (editState == MINUTE || SECOND) {
             editorAdjust = round(conversionValue * 30.0);
             if (editState == MINUTE) editorAdjust += (int)minutes;
@@ -335,6 +375,7 @@ void displayTime(long unsigned int time) {
         }
     }
 
+    //If in edit state, set adjust value within bounds
     if (currentState == EDIT) {
         while (editorAdjust >= bounds) {
             editorAdjust -= bounds;
@@ -343,6 +384,7 @@ void displayTime(long unsigned int time) {
             editorAdjust += bounds;
         }
 
+        //Changes current value to adjust value based on editing state
         if (editState == MONTH) months = (long unsigned int)editorAdjust;
         else if (editState == DAY) days = (long unsigned int)editorAdjust;
         else if (editState == HOUR) hours = (long unsigned int)editorAdjust;
@@ -350,33 +392,44 @@ void displayTime(long unsigned int time) {
         else seconds = (long unsigned int)editorAdjust;
     }
 
+    //Gets button input
     char buttons = buttonStates();
 
+    //Test if the left button is pressed and not in editing state
     if (buttons & BIT0 && currentState != EDIT) {
+        //Sets edit state to month, sets previous pot adc reading to current reading, and sets current state to edit
         editState = MONTH;
         editADCVal = ADCPot;
         currentState = EDIT;
     }
+    //Tests if left button is pressed or current state is edit
     else if (buttons & BIT0 || (buttons & BIT3 && currentState == EDIT)) {
+        //Appends the adjusted date and time into the real amount of time
         timeCount = timeToSeconds(months+1, days, hours, minutes, seconds, leapYear);
+        //Advances the editing state to the next one
         if (editState == SECOND) {
             editState = MONTH;
         }
         else {
             editState++;
         }
+        //Sets previous pot adc reading to current reading
         editADCVal = ADCPot;
+        //Goes back to home state if the right button is pressed
         if (buttons & BIT3) {
             currentState = HOME;
         }
     }
 
+    //Stores the date in the MMM DD format
     char month[] = {'J', 'a', 'n'};
     char day[] = {floor(days / 10) + 48, (days % 10) + 48};
+    //Stores the time in the HH:MM:SS format
     char hour[] = {floor(hours / 10) + 48, (hours % 10) + 48};
     char minute[] = {floor(minutes / 10) + 48, (minutes % 10) + 48};
     char second[] = {floor(seconds / 10) + 48, (seconds % 10) + 48};
 
+    //Sets the month character array based on the current month
     switch (months) {
     case 1:
         month[0] = 'F';month[1] = 'e';month[2] = 'b';
@@ -413,9 +466,11 @@ void displayTime(long unsigned int time) {
     break;
     }
 
+    //Creates the date and time arrays to print to the screen
     char date[] = {month[0], month[1], month[2], ' ', day[0], day[1], 0x00};
     char clock[] = {hour[0], hour[1], ':', minute[0], minute[1], ':', second[0], second[1], 0x00};
 
+    //Adds an underline under the current editing state if current state is in edit mode
     if (currentState == EDIT) {
         if (editState == HOUR) {
             Graphics_drawStringCentered(&g_sContext, "__      ", AUTO_STRING_LENGTH, 48, 52, TRANSPARENT_TEXT);
@@ -434,23 +489,29 @@ void displayTime(long unsigned int time) {
         }
     }
 
+    //Changes y values to center time if in editing state and time and temperature if in home state
     int dataY = 25;
     if (currentState == EDIT) {
         dataY = 40;
     }
 
+    //Prints the date
     if (dataElement() & BIT1) {
         Graphics_drawStringCentered(&g_sContext, date, AUTO_STRING_LENGTH, 48, dataY, TRANSPARENT_TEXT);
     }
+    //Prints the time
     if ((dataElement() & BIT2) == BIT2) {
         Graphics_drawStringCentered(&g_sContext, clock, AUTO_STRING_LENGTH, 48, dataY + 10, TRANSPARENT_TEXT);
     }
 
 }
 
+//Displays temperature
 void displayTemp(float inAvgTempC) {
+    //Converts inputted degrees in C to F
     float CToF = inAvgTempC * 9.0/5.0 + 32.0;
 
+    //Stores degree in C array in DDD.D C format
     char tempC[] = {floor(inAvgTempC / 100.0) + 48,
                     ((unsigned int)floor(inAvgTempC / 10.0) % 10) + 48,
                     floor((unsigned int)inAvgTempC % 10) + 48,
@@ -458,15 +519,18 @@ void displayTemp(float inAvgTempC) {
                     ((int)floor(inAvgTempC * 10.0) % 10) + 48,
                     ' ', 'C', 0x00};
 
+    //Stores degree in F array in DDD.D F format
     char tempF[] = {floor(CToF / 100.0) + 48,
                     ((unsigned int)floor(CToF / 10.0) % 10) + 48,
                     ((unsigned int)CToF % 10) + 48, '.',
                     (unsigned int)floor(CToF * 10.0) % 10 + 48,
                     ' ', 'F', 0x00};
 
+    //Prints the temperature in C
     if ((dataElement() & BIT3) == BIT3) {
         Graphics_drawStringCentered(&g_sContext, tempC, AUTO_STRING_LENGTH, 48, 45, TRANSPARENT_TEXT);
     }
+    //Prints the temperature in F
     if ((dataElement() & BIT4) == BIT4) {
         Graphics_drawStringCentered(&g_sContext, tempF, AUTO_STRING_LENGTH, 48, 55, TRANSPARENT_TEXT);
     }
