@@ -1,6 +1,3 @@
-/************** ECE2049 DEMO CODE ******************/
-/**************  13 March 2019   ******************/
-/***************************************************/
 // INCLUDES
 #include <msp430.h>
 #include <stdlib.h>
@@ -9,165 +6,237 @@
 
 // PROTOTYPES
 __interrupt void Timer_A2_ISR(void);
-void home();
-void edit();
-void displayTime(int count);
-void displayTemp(float inAvgTempC);
+void states();
+void DACInit(void);
+void DACSetValue(unsigned int dac_code);
+void configButtons();
+char buttonStates();
 
-#define ADCSIZE 36
-// Temperature Sensor Calibration = Reading at 30 degrees C is stored at addr 1A1Ah
-// See end of datasheet for TLV table memory mapping
-#define CALADC12_15V_30C  *((unsigned int *)0x1A1A)
-// Temperature Sensor Calibration = Reading at 85 degrees C is stored at addr 1A1Ch
-//See device datasheet for TLV table memory mapping
-#define CALADC12_15V_85C  *((unsigned int *)0x1A1C)
+enum States{HOME, DC, SQUARE, SAWTOOTH, TRIANGLE};
 
-#define degC_per_bit (float)((float)(85.0 - 30.0))/((float)(CALADC12_15V_85C-CALADC12_15V_30C))
+int currentState = SAWTOOTH;
+long unsigned int timeCount = 0;
+unsigned int leapCount = 0;
+unsigned int ADCPot = 0;
+unsigned int waveCount = 4000;
 
-enum States{HOME, EDIT};
-int currentState = HOME;
-bool update = false;
-float acdC[ADCSIZE];
-unsigned int adcIndex = 0;
-int timeCount = 0;
 
-int dayCount[12] = {31,28,31,30,31,30,31,31,30,31,30,31};
-int date[5];
-int tempC[5];
-int tempF[5];
+// TIMER INTERRUPT
+#pragma vector = TIMER2_A0_VECTOR
+__interrupt void Timer_A2_ISR(void) {
+    if (leapCount < 482) {
+        timeCount++;
+        leapCount++;
+    }
+    else {
+        leapCount = 0;
+    }
 
+    if (currentState == DC) DACSetValue(ADCPot);
+    else if (currentState == SAWTOOTH) {
+        DACSetValue(waveCount);
+    }
+}
 
 // MAIN
 void main(void) {
-
-    WDTCTL = WDTPW | WDTHOLD;    // Stop watchdog timer. Always need to stop this!!
-                                 // You can then configure it properly, if desired
+    WDTCTL = WDTPW + WDTHOLD;   // Stop WDT
 
     // timer A2 management
     TA2CTL = TASSEL_1 + ID_0 + MC_1; // 32786 Hz is set
-    TA2CCR0 = 32785; // sets interrupt to occur every (TA2CCR0 + 1)/32786 seconds
+    TA2CCR0 = 10; // sets interrupt to occur every (TA2CCR0 + 1)/32786 seconds
     TA2CCTL0 = CCIE; // enables TA2CCR0 interrupt
 
-    // enables global interrupts
-    _BIS_SR(GIE);
 
 
-    REFCTL0 &= ~REFMSTR;    // Reset REFMSTR to hand over control of
-                            // internal reference voltages to
-                            // ADC12_A control registers
+    // Configure P8.0 as digital IO output and set it to 1
+    // This supplied 3.3 volts across scroll wheel potentiometer
+    // See schematic at end or MSP-EXP430F5529 board users guide
+    P6SEL &= ~BIT0;
+    REFCTL0 &= ~REFMSTR;                      // Reset REFMSTR to hand over control
+    // internal reference voltages to
+    // ADC12_A control registers
+    ADC12CTL0 = ADC12SHT0_9 | ADC12ON;
 
-    ADC12CTL0 = ADC12SHT0_9 | ADC12REFON | ADC12ON;     // Internal ref = 1.5V
+      ADC12CTL1 = ADC12SHP;                     // Enable sample timer
 
-    ADC12CTL1 = ADC12SHP;    // Enable sample timer
-
-    // Using ADC12MEM0 to store reading
-    ADC12MCTL0 = ADC12SREF_1 + ADC12INCH_10;    // ADC i/p ch A10 = temp sense
-                                                // ACD12SREF_1 = internal ref = 1.5v
-
-    __delay_cycles(100);                        // delay to allow Ref to settle
-
-    ADC12CTL0 |= ADC12ENC;                      // Enable conversion
+    ADC12MCTL0 = ADC12SREF_0 + ADC12INCH_0;    // ADC i/p ch A10 = temp sense
+    // ACD12SREF_0 = Vref+ = Vcc
+    __delay_cycles(100);                      // delay to allow Ref to settle
+    ADC12CTL0 |= ADC12ENC;     // Enable conversion
 
     // setup for LEDs, LCD, Keypad, Buttons
     initLeds();
     configDisplay();
     configKeypad();
+    configButtons();
+    DACInit();
 
-    // state machine
-    while (1) {
-        char key = getKey();
-        switch (currentState) {
-        case HOME:
-            home();
-        break;
-        case EDIT:
-            edit();
-        break;
+    Graphics_clearDisplay(&g_sContext);
+    Graphics_drawStringCentered(&g_sContext, "Press a Button", AUTO_STRING_LENGTH, 48, 15, TRANSPARENT_TEXT);
+    Graphics_drawStringCentered(&g_sContext, "To Begin", AUTO_STRING_LENGTH, 48, 25, TRANSPARENT_TEXT);
+    Graphics_drawStringCentered(&g_sContext, "B1:DC Voltage", AUTO_STRING_LENGTH, 48, 45, TRANSPARENT_TEXT);
+    Graphics_drawStringCentered(&g_sContext, "B2:Square Wave", AUTO_STRING_LENGTH, 48, 55, TRANSPARENT_TEXT);
+    Graphics_drawStringCentered(&g_sContext, "B3:Sawtooth Wave", AUTO_STRING_LENGTH, 48, 65, TRANSPARENT_TEXT);
+    Graphics_drawStringCentered(&g_sContext, "B4:Triangle Wave", AUTO_STRING_LENGTH, 48, 75, TRANSPARENT_TEXT);
+    Graphics_flushBuffer(&g_sContext);
+
+    // enables global interrupts
+    _BIS_SR(GIE);
+
+    while(1) {
+
+        //clear the start bit
+        ADC12CTL0 &= ~ADC12SC;
+        //Sampling and conversion start
+        ADC12CTL0 |= ADC12SC;
+
+        while (ADC12CTL1 & ADC12BUSY) {
+            states();
         }
+        ADCPot = ADC12MEM0;
     }
 }
 
-// TIMER INTERRUPT
-#pragma vector = TIMER2_A0_VECTOR
-__interrupt void Timer_A2_ISR(void) {
-    timeCount++;
-    update = true;
-}
+// 1/100 s = 0.01s
+// 1/75 s = 0.01333s
+// 1/150 s = 0.006666s
 
-void home() {
-    if (update) {
-        update = false;
+// ideal is 1/300 = 0.003333s
+// 32768/300 = 109.2266
 
-        ADC12CTL0 &= ~ADC12SC;      // clear the start bit
-        ADC12CTL0 |= ADC12SC;       // Sampling and conversion start
-                                    // Single conversion (single channel)
+void states() {
 
-        unsigned int adc = ADC12MEM0;
+    /*
+    switch(buttonStates()) {
+    case BIT0:
+        currentState = DC;
+    break;
+    case BIT1:
+        currentState = SQUARE;
+    break;
+    case BIT2:
+        currentState = SAWTOOTH;
+    break;
+    case BIT3:
+        currentState = TRIANGLE;
+    break;
+    }
+    */
 
-        float temperatureDegC = (float) ( (long)adc - CALADC12_15V_30C) * degC_per_bit + 30.0;
 
-        acdC[adcIndex] = temperatureDegC;
-        adcIndex++;
-        if (adcIndex >= ADCSIZE) {
-            adcIndex = 0;
+    switch(currentState) {
+    case DC:
+    break;
+    case SQUARE:
+        if (timeCount % 100 < 50) {
+
         }
 
-        volatile int i;
-        volatile float avgC = 0;
-        for (i = 0; i < ADCSIZE; i++) {
-            avgC += acdC[i];
-        }
-        avgC = avgC / (float)ADCSIZE;
+    break;
+    case SAWTOOTH:
 
-        if (timeCount % 3 == 0) {
-            Graphics_clearDisplay(&g_sContext); // Clear the display
-            displayTime(timeCount);
-            displayTemp(avgC);
-            Graphics_flushBuffer(&g_sContext);
-        }
+    break;
+    case TRIANGLE:
+
+    break;
+    default:
+    break;
     }
 }
 
-void edit() {
+void DACInit(void) {
+    // Configure LDAC and CS for digital IO outputs
+    DAC_PORT_LDAC_SEL &= ~DAC_PIN_LDAC;
+    DAC_PORT_LDAC_DIR |=  DAC_PIN_LDAC;
+    DAC_PORT_LDAC_OUT |= DAC_PIN_LDAC; // Deassert LDAC
 
+    DAC_PORT_CS_SEL   &= ~DAC_PIN_CS;
+    DAC_PORT_CS_DIR   |=  DAC_PIN_CS;
+    DAC_PORT_CS_OUT   |=  DAC_PIN_CS;  // Deassert CS
 }
-void displayTime (int count) {
-    int rawDays = count / 86400; // 60 * 60 * 24 = seconds in a day
-    int daysAccum = 0;
 
-    int i = 0;
-    for(i=0;i<12;i++) {
-        if (rawDays < (dayCount[i]+daysAccum)) {
-            date[0] = i + 1;
-            date[1] = (rawDays - daysAccum) + 1;
-            date[2] = ((count % 86400) - (daysAccum * 86400)) / 3600;
-            date[3] = ((count % 86400) - (daysAccum * 86400)) % 3600 / 60;
-            date[4] = ((count % 86400) - (daysAccum * 86400)) % 3600 % 60;
-            break;
-        }
-        else daysAccum += dayCount[i];
+void DACSetValue(unsigned int dac_code) {
+    // Start the SPI transmission by asserting CS (active low)
+    // This assumes DACInit() already called
+    DAC_PORT_CS_OUT &= ~DAC_PIN_CS;
+
+    // Write in DAC configuration bits. From DAC data sheet
+    // 3h=0011 to highest nibble.
+    // 0=DACA, 0=buffered, 1=Gain=1, 1=Out Enbl
+    dac_code |= 0x3000;   // Add control bits to DAC word
+
+    uint8_t lo_byte = (unsigned char)(dac_code & 0x00FF);
+    uint8_t hi_byte = (unsigned char)((dac_code & 0xFF00) >> 8);
+
+    // First, send the high byte
+    DAC_SPI_REG_TXBUF = hi_byte;
+
+    // Wait for the SPI peripheral to finish transmitting
+    while(!(DAC_SPI_REG_IFG & UCTXIFG)) {
+        _no_operation();
     }
+
+    // Then send the low byte
+    DAC_SPI_REG_TXBUF = lo_byte;
+
+    // Wait for the SPI peripheral to finish transmitting
+    while(!(DAC_SPI_REG_IFG & UCTXIFG)) {
+        _no_operation();
+    }
+
+    // We are done transmitting, so de-assert CS (set = 1)
+    DAC_PORT_CS_OUT |=  DAC_PIN_CS;
+
+    // This DAC is designed such that the code we send does not
+    // take effect on the output until we toggle the LDAC pin.
+    // This is because the DAC has multiple outputs. This design
+    // enables a user to send voltage codes to each output and
+    // have them all take effect at the same time.
+    DAC_PORT_LDAC_OUT &= ~DAC_PIN_LDAC;  // Assert LDAC
+    __delay_cycles(10);                 // small delay
+    DAC_PORT_LDAC_OUT |=  DAC_PIN_LDAC;  // De-assert LDAC
 }
 
+// BUTTON CONFIGURATION HELPER
+void configButtons() {
+    //Sets P2.2, P3.6, P7.0, and P7.4 to IO
+    P2SEL &= ~BIT2;
+    P3SEL &= ~BIT6;
+    P7SEL &= ~(BIT0 | BIT4);
 
-void displayTemp(float inAvgTempC) {
-    int correctedC = (int)(inAvgTempC * 10);
-    tempC[0] = correctedC / 1000;
-    tempC[1] = (correctedC - (tempC[0] * 1000)) / 100;
-    tempC[2] = (correctedC - (tempC[1] * 100)) / 10;
-    tempC[3] = '.';
-    tempC[4] = inAvgTempC - (tempC[2] * 10);
-    Graphics_drawStringCentered(&g_sContext, (char)tempC, AUTO_STRING_LENGTH, 48, 25, TRANSPARENT_TEXT);
+    //Sets P2.2, P3.6, P7.0, and P7.4 to input
+    P2DIR &= ~BIT2;
+    P3DIR &= ~BIT6;
+    P7DIR &= ~(BIT0 | BIT4);
 
-    int correctedF = (correctedC * 9 / 5) + 32;
-    tempF[0] = correctedF / 1000;
-    tempF[1] = (correctedF - (tempF[0] * 1000)) / 100;
-    tempF[2] = (correctedF - (tempF[1] * 100)) / 10;
-    tempF[3] = '.';
-    tempF[4] = correctedF - (tempF[2] * 10);
-    Graphics_drawStringCentered(&g_sContext, (char)tempF, AUTO_STRING_LENGTH, 48, 25, TRANSPARENT_TEXT);
+    //Sets pins to use pull up/down
+    P2REN |= BIT2;
+    P3REN |= BIT6;
+    P7REN |= (BIT0 | BIT4);
 
+    //Sets pins to pull up
+    P2OUT |= BIT2;
+    P3OUT |= BIT6;
+    P7OUT |= (BIT0 | BIT4);
 }
 
+// BUTTON PRESS CHECKING HANDLER
+char buttonStates() {
+    char returnState = 0x00;
+    if ((P2IN & BIT2) == 0) {
+        returnState |= BIT2;
+    }
+    if ((P3IN & BIT6) == 0) {
+        returnState |= BIT1;
+    }
+    if ((P7IN & BIT0) == 0) {
+        returnState |= BIT0;
+    }
+    if ((P7IN & BIT4) == 0) {
+        returnState |= BIT3;
+    }
+    return returnState;
+}
 
 
