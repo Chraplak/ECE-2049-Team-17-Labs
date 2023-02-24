@@ -14,7 +14,7 @@ char buttonStates();
 
 enum States{HOME, DC, SQUARE, SAWTOOTH, TRIANGLE};
 
-int currentState = HOME;
+int currentState = DC;
 long unsigned int timeCount = 0;
 unsigned int leapCount = 0;
 unsigned int ADCPot = 0;
@@ -33,7 +33,7 @@ __interrupt void Timer_A2_ISR(void) {
 
     if (currentState == DC) DACSetValue(ADCPot);
     else if (currentState == SQUARE) {
-        DACSetValue(ADCPot);
+        //if (timeCount % )
     }
 }
 
@@ -46,8 +46,7 @@ void main(void) {
     TA2CCR0 = 108; // sets interrupt to occur every (TA2CCR0 + 1)/32786 seconds
     TA2CCTL0 = CCIE; // enables TA2CCR0 interrupt
 
-    // enables global interrupts
-    _BIS_SR(GIE);
+
 
     // Configure P8.0 as digital IO output and set it to 1
     // This supplied 3.3 volts across scroll wheel potentiometer
@@ -80,6 +79,9 @@ void main(void) {
     Graphics_drawStringCentered(&g_sContext, "B3:Sawtooth Wave", AUTO_STRING_LENGTH, 48, 65, TRANSPARENT_TEXT);
     Graphics_drawStringCentered(&g_sContext, "B4:Triangle Wave", AUTO_STRING_LENGTH, 48, 75, TRANSPARENT_TEXT);
     Graphics_flushBuffer(&g_sContext);
+
+    // enables global interrupts
+    _BIS_SR(GIE);
 
     while(1) {
 
