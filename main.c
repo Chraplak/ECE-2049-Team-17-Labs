@@ -16,24 +16,33 @@ enum States{HOME, DC, SQUARE, SAWTOOTH, TRIANGLE};
 
 int currentState = DC;
 long unsigned int timeCount = 0;
-unsigned int leapCount = 0;
+unsigned int leapCount1 = 0, leapCount2 = 0;
 unsigned int ADCPot = 0;
 
 
 // TIMER INTERRUPT
 #pragma vector = TIMER2_A0_VECTOR
 __interrupt void Timer_A2_ISR(void) {
-    if (leapCount < 482) {
+    if (leapCount1 < 142 && leapCount2 < 187) {
         timeCount++;
-        leapCount++;
+        leapCount1++;
+    }
+    else if (leapCount1 == 142) {
+        leapCount1 = 0;
+        leapCount2++;
     }
     else {
-        leapCount = 0;
+        leapCount2 = 0;
     }
 
-    if (currentState == DC) DACSetValue(ADCPot);
+    if (currentState == DC) DACSetValue(4000);
     else if (currentState == SQUARE) {
-        //if (timeCount % )
+        if (timeCount % 30 < 15) {
+            DACSetValue(ADCPot);
+        }
+        else {
+            DACSetValue(0);
+        }
     }
 }
 
@@ -43,7 +52,7 @@ void main(void) {
 
     // timer A2 management
     TA2CTL = TASSEL_1 + ID_0 + MC_1; // 32786 Hz is set
-    TA2CCR0 = 108; // sets interrupt to occur every (TA2CCR0 + 1)/32786 seconds
+    TA2CCR0 = 10; // sets interrupt to occur every (TA2CCR0 + 1)/32786 seconds
     TA2CCTL0 = CCIE; // enables TA2CCR0 interrupt
 
 
@@ -91,7 +100,7 @@ void main(void) {
         ADC12CTL0 |= ADC12SC;
 
         while (ADC12CTL1 & ADC12BUSY) {
-            states();
+            //states();
         }
         ADCPot = ADC12MEM0;
     }
@@ -106,6 +115,7 @@ void main(void) {
 
 void states() {
 
+    /*
     switch(buttonStates()) {
     case BIT0:
         currentState = DC;
@@ -120,17 +130,20 @@ void states() {
         currentState = TRIANGLE;
     break;
     }
+    */
 
-
+/*
     switch(currentState) {
     case DC:
         DACSetValue(ADCPot);
     break;
     case SQUARE:
-        if (timeCount % 100 < 50) {
-
+        if (timeCount % 30 < 15) {
+            DACSetValue(ADCPot);
         }
-
+        else {
+            DACSetValue(0);
+        }
     break;
     case SAWTOOTH:
 
@@ -141,6 +154,7 @@ void states() {
     default:
     break;
     }
+    */
 }
 
 void DACInit(void) {
