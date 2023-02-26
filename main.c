@@ -16,26 +16,76 @@ enum States{HOME, DC, SQUARE, SAWTOOTH, TRIANGLE};
 
 int currentState = SAWTOOTH;
 long unsigned int timeCount = 0;
-unsigned int leapCount = 0;
+unsigned int leapCount1 = 0, leapCount2 = 0;
 unsigned int ADCPot = 0;
-unsigned int waveCount = 4000;
+unsigned int waveCount = 0;
 
 
 // TIMER INTERRUPT
 #pragma vector = TIMER2_A0_VECTOR
 __interrupt void Timer_A2_ISR(void) {
-    if (leapCount < 482) {
-        timeCount++;
-        leapCount++;
-    }
-    else {
-        leapCount = 0;
+
+
+    //unsigned int waveCount = (timeCount % 20);
+
+    switch(currentState) {
+    case SQUARE:
+        if (timeCount % 60 < 30) {
+            DACSetValue(ADCPot);
+        }
+        else {
+            DACSetValue(0);
+        }
+    break;
+    case SAWTOOTH:
+        DACSetValue(waveCount * (float)(ADCPot / 4096.0));
+        waveCount+= 102;
+        if(waveCount > 4000) waveCount = 0;
+    break;
+    case TRIANGLE:
+    break;
+    case DC:
+        DACSetValue(ADCPot);
+    break;
     }
 
-    if (currentState == DC) DACSetValue(ADCPot);
-    else if (currentState == SAWTOOTH) {
-        DACSetValue(waveCount);
+    if (leapCount1 < 142 && leapCount2 < 187) {
+        timeCount++;
+        leapCount1++;
     }
+    else if (leapCount1 == 142) {
+        leapCount1 = 0;
+        leapCount2++;
+    }
+    else {
+        leapCount2 = 0;
+    }
+
+    if (!(ADC12CTL1 & ADC12BUSY)) {
+        ADCPot = ADC12MEM0;
+        //clear the start bit
+        ADC12CTL0 &= ~ADC12SC;
+        //Sampling and conversion start
+        ADC12CTL0 |= ADC12SC;
+    }
+
+
+    /*
+    if (currentState == DC) DACSetValue(ADCPot);
+    else if (currentState == SQUARE) {
+        if (timeCount % 30 < 15) {
+            DACSetValue(ADCPot);
+        }
+        else {
+            DACSetValue(0);
+        }
+    }
+    else if (currentState == SAWTOOTH) {
+        unsigned int waveCount = timeCount % 20;
+        DACSetValue(ADCPot / 20 * waveCount);
+    }
+    */
+
 }
 
 // MAIN
@@ -84,17 +134,23 @@ void main(void) {
     // enables global interrupts
     _BIS_SR(GIE);
 
-    while(1) {
+    //clear the start bit
+            ADC12CTL0 &= ~ADC12SC;
+            //Sampling and conversion start
+            ADC12CTL0 |= ADC12SC;
 
+    while(1) {
+/*
         //clear the start bit
         ADC12CTL0 &= ~ADC12SC;
         //Sampling and conversion start
         ADC12CTL0 |= ADC12SC;
 
         while (ADC12CTL1 & ADC12BUSY) {
-            states();
+            //states();
+            __no_operation();
         }
-        ADCPot = ADC12MEM0;
+        ADCPot = ADC12MEM0;*/
     }
 }
 
@@ -124,18 +180,22 @@ void states() {
     }
     */
 
-
+/*
     switch(currentState) {
     case DC:
+        DACSetValue(ADCPot);
     break;
     case SQUARE:
-        if (timeCount % 100 < 50) {
-
+        if (timeCount % 30 < 15) {
+            DACSetValue(ADCPot);
         }
-
+        else {
+            DACSetValue(0);
+        }
     break;
     case SAWTOOTH:
-
+        unsigned int waveCount = timeCount % 40;
+        DACSetValue(ADCPot / 40 * waveCount);
     break;
     case TRIANGLE:
 
@@ -143,6 +203,7 @@ void states() {
     default:
     break;
     }
+*/
 }
 
 void DACInit(void) {
