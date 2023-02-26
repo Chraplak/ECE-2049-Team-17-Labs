@@ -14,11 +14,12 @@ char buttonStates();
 
 enum States{HOME, DC, SQUARE, SAWTOOTH, TRIANGLE};
 
-int currentState = SAWTOOTH;
+int currentState = TRIANGLE;
 long unsigned int timeCount = 0;
 unsigned int leapCount1 = 0, leapCount2 = 0;
 unsigned int ADCPot = 0;
 unsigned int waveCount = 0;
+bool goingUp = true;
 
 
 // TIMER INTERRUPT
@@ -39,10 +40,15 @@ __interrupt void Timer_A2_ISR(void) {
     break;
     case SAWTOOTH:
         DACSetValue(waveCount * (float)(ADCPot / 4096.0));
-        waveCount+= 102;
+        waveCount+= 350;
         if(waveCount > 4000) waveCount = 0;
     break;
     case TRIANGLE:
+        DACSetValue(waveCount * (float)(ADCPot / 4096.0));
+        if(goingUp) waveCount+= 350;
+        else waveCount-= 350;
+        if(waveCount > 4000) goingUp = false;
+        if(waveCount < 100) goingUp = true;
     break;
     case DC:
         DACSetValue(ADCPot);
