@@ -20,6 +20,7 @@ unsigned int leapCount1 = 0, leapCount2 = 0;
 unsigned int ADCPot = 0;
 unsigned int waveCount = 0;
 bool goingUp = true;
+unsigned int counter = 0;
 
 
 // TIMER INTERRUPT
@@ -31,7 +32,11 @@ __interrupt void Timer_A2_ISR(void) {
 
     switch(currentState) {
     case SQUARE:
-        if (timeCount % 60 < 30) {
+        counter++;
+        if (counter >= 30) {
+            counter = 0;
+        }
+        if (counter < 15) {
             DACSetValue(ADCPot);
         }
         else {
