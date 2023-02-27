@@ -72,6 +72,21 @@ __interrupt void Timer_A2_ISR(void) {
         leapCount2 = 0;
     }
 
+    char buttons = buttonStates();
+
+    if (buttons & BIT0) {
+            currentState = DC;
+    }
+    else if (buttons & BIT1) {
+            currentState = SQUARE;
+    }
+    else if (buttons & BIT2) {
+            currentState = SAWTOOTH;
+    }
+    else if (buttons & BIT3) {
+            currentState = TRIANGLE;
+    }
+
     if (!(ADC12CTL1 & ADC12BUSY)) {
         ADCPot = ADC12MEM0;
         //clear the start bit
