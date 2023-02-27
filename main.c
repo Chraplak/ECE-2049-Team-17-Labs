@@ -6,7 +6,6 @@
 
 // PROTOTYPES
 __interrupt void Timer_A2_ISR(void);
-void states();
 void DACInit(void);
 void DACSetValue(unsigned int dac_code);
 void configButtons();
@@ -143,77 +142,15 @@ void main(void) {
     _BIS_SR(GIE);
 
     //clear the start bit
-            ADC12CTL0 &= ~ADC12SC;
-            //Sampling and conversion start
-            ADC12CTL0 |= ADC12SC;
+    ADC12CTL0 &= ~ADC12SC;
+    //Sampling and conversion start
+    ADC12CTL0 |= ADC12SC;
 
     while(1) {
-/*
-        //clear the start bit
-        ADC12CTL0 &= ~ADC12SC;
-        //Sampling and conversion start
-        ADC12CTL0 |= ADC12SC;
-
-        while (ADC12CTL1 & ADC12BUSY) {
-            //states();
-            __no_operation();
-        }
-        ADCPot = ADC12MEM0;*/
     }
 }
 
-// 1/100 s = 0.01s
-// 1/75 s = 0.01333s
-// 1/150 s = 0.006666s
-
-// ideal is 1/300 = 0.003333s
-// 32768/300 = 109.2266
-
-void states() {
-
-    /*
-    switch(buttonStates()) {
-    case BIT0:
-        currentState = DC;
-    break;
-    case BIT1:
-        currentState = SQUARE;
-    break;
-    case BIT2:
-        currentState = SAWTOOTH;
-    break;
-    case BIT3:
-        currentState = TRIANGLE;
-    break;
-    }
-    */
-
-/*
-    switch(currentState) {
-    case DC:
-        DACSetValue(ADCPot);
-    break;
-    case SQUARE:
-        if (timeCount % 30 < 15) {
-            DACSetValue(ADCPot);
-        }
-        else {
-            DACSetValue(0);
-        }
-    break;
-    case SAWTOOTH:
-        unsigned int waveCount = timeCount % 40;
-        DACSetValue(ADCPot / 40 * waveCount);
-    break;
-    case TRIANGLE:
-
-    break;
-    default:
-    break;
-    }
-*/
-}
-
+// DAC INITIALIZING HELPER
 void DACInit(void) {
     // Configure LDAC and CS for digital IO outputs
     DAC_PORT_LDAC_SEL &= ~DAC_PIN_LDAC;
@@ -225,6 +162,7 @@ void DACInit(void) {
     DAC_PORT_CS_OUT   |=  DAC_PIN_CS;  // Deassert CS
 }
 
+// DAC SETTING HELPER
 void DACSetValue(unsigned int dac_code) {
     // Start the SPI transmission by asserting CS (active low)
     // This assumes DACInit() already called
@@ -307,5 +245,3 @@ char buttonStates() {
     }
     return returnState;
 }
-
-
