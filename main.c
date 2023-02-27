@@ -10,7 +10,7 @@ void DACInit(void);
 void DACSetValue(unsigned int dac_code);
 void configButtons();
 char buttonStates();
-void linearity();
+float linearity();
 
 enum States{HOME, DC, SQUARE, SAWTOOTH, TRIANGLE};
 
@@ -140,13 +140,16 @@ __interrupt void Timer_A2_ISR(void) {
         currentState = TRIANGLE;
     }
 
-    if (!(ADC12CTL1 & ADC12BUSY)) {
+    if (ADC12IFG0) {
         ADCPot = ADC12MEM0;
         //clear the start bit
         ADC12CTL0 &= ~ADC12SC;
         //Sampling and conversion start
         ADC12CTL0 |= ADC12SC;
     }
+
+    float value = 0.0;
+    value = linearity();
 
 }
 
@@ -168,14 +171,15 @@ void main(void) {
     REFCTL0 &= ~REFMSTR;                      // Reset REFMSTR to hand over control
     // internal reference voltages to
     // ADC12_A control registers
-    ADC12CTL0 = ADC12SHT0_9 | ADC12ON;
+    ADC12CTL0 = ADC12SHT0_9 | ADC12ON | ADC12MSC | ADC12REFON;
 
-      ADC12CTL1 = ADC12SHP;                     // Enable sample timer
+      ADC12CTL1 = ADC12SHP + ADC12CONSEQ_1;                     // Enable sample timer
 
     ADC12MCTL0 = ADC12SREF_0 + ADC12INCH_0;    // ADC i/p ch A10 = temp sense
+    ADC12MCTL1 = ADC12SREF_0 + ADC12INCH_0 + ADC12EOS;
     // ACD12SREF_0 = Vref+ = Vcc
     __delay_cycles(100);                      // delay to allow Ref to settle
-    ADC12CTL0 |= ADC12ENC;     // Enable conversion
+    ADC12CTL0 |= ADC12ENC | ADC12SC;     // Enable conversion
 
     // setup for LEDs, LCD, Keypad, Buttons
     initLeds();
@@ -310,7 +314,12 @@ char buttonStates() {
     return returnState;
 }
 
-void linearity() {
-
+float linearity() {
+    float value = 0.0;
+    if (ADC12IFG1) {
+        unsigned int ADC = ADC12MEM1;
+        value = (float)ADC / 4095.0 * 3.3;
+    }
+    return value;
 }
 
