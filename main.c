@@ -79,24 +79,6 @@ __interrupt void Timer_A2_ISR(void) {
         //Sampling and conversion start
         ADC12CTL0 |= ADC12SC;
     }
-
-
-    /*
-    if (currentState == DC) DACSetValue(ADCPot);
-    else if (currentState == SQUARE) {
-        if (timeCount % 30 < 15) {
-            DACSetValue(ADCPot);
-        }
-        else {
-            DACSetValue(0);
-        }
-    }
-    else if (currentState == SAWTOOTH) {
-        unsigned int waveCount = timeCount % 20;
-        DACSetValue(ADCPot / 20 * waveCount);
-    }
-    */
-
 }
 
 // MAIN
