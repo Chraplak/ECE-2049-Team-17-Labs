@@ -6,11 +6,11 @@
 
 // PROTOTYPES
 __interrupt void Timer_A2_ISR(void);
-void states();
 void DACInit(void);
 void DACSetValue(unsigned int dac_code);
 void configButtons();
 char buttonStates();
+void linearity();
 
 enum States{HOME, DC, SQUARE, SAWTOOTH, TRIANGLE};
 
@@ -20,6 +20,7 @@ unsigned int leapCount1 = 0, leapCount2 = 0;
 unsigned int ADCPot = 0;
 unsigned int counter = 0;
 bool rise = true;
+unsigned int sawCount = 0;
 
 unsigned int waveCount = 0;
 
@@ -39,7 +40,9 @@ __interrupt void Timer_A2_ISR(void) {
         leapCount2 = 0;
     }
 
-    unsigned int period = 375.0 * 3.6;
+    //unsigned int period = 375.0 * 3.6;
+
+    //double value = 0.0;
 
     switch(currentState) {
     case SQUARE:
@@ -56,17 +59,27 @@ __interrupt void Timer_A2_ISR(void) {
     break;
     case SAWTOOTH:
 
+        sawCount++;
+        if (sawCount >= 40) {
+            sawCount = 0;
+        }
+        unsigned int value = (unsigned int)((double)ADCPot * (double)sawCount / 40.0);
+        DACSetValue(value);
+
+
+        /*
         counter++;
+        value += (double)ADCPot/40.0;
         if (counter >= 30) {
             counter = 0;
+            value = 0.0;
         }
-        if (counter < 15) {
-            DACSetValue(ADCPot/counter);
-        }
-        else {
-            DACSetValue(0);
-        }
+        DACSetValue((unsigned int)value);
+        */
 
+
+
+        ////////////////////////////////
         /*
         counter++;
         if (counter >= 200) counter = 0;
@@ -88,8 +101,8 @@ __interrupt void Timer_A2_ISR(void) {
         if (rise == true) counter++;
         else counter--;
         if (counter <= 0) rise = true;
-        else if (counter >= 40) rise = false;
-        DACSetValue((unsigned int)((double)ADCPot * ((double)counter / 40.0)));
+        else if (counter >= 20) rise = false;
+        DACSetValue((unsigned int)((double)ADCPot * ((double)counter / 20.0)));
 
 
         /*
@@ -106,6 +119,9 @@ __interrupt void Timer_A2_ISR(void) {
     break;
     case DC:
         DACSetValue(ADCPot);
+    break;
+    default:
+        DACSetValue(0);
     break;
     }
 
@@ -177,6 +193,11 @@ void main(void) {
     Graphics_drawStringCentered(&g_sContext, "B4:Triangle Wave", AUTO_STRING_LENGTH, 48, 75, TRANSPARENT_TEXT);
     Graphics_flushBuffer(&g_sContext);
 
+
+    P6SEL &= ~BIT1;
+    P6DIR &= ~BIT1;
+
+
     // enables global interrupts
     _BIS_SR(GIE);
 
@@ -185,9 +206,7 @@ void main(void) {
     //Sampling and conversion start
     ADC12CTL0 |= ADC12SC;
 
-    while(1) {
-
-    }
+    while(1) {}
 }
 
 // 1/100 s = 0.01s
@@ -196,51 +215,6 @@ void main(void) {
 
 // ideal is 1/300 = 0.003333s
 // 32768/300 = 109.2266
-
-void states() {
-
-    /*
-    switch(buttonStates()) {
-    case BIT0:
-        currentState = DC;
-    break;
-    case BIT1:
-        currentState = SQUARE;
-    break;
-    case BIT2:
-        currentState = SAWTOOTH;
-    break;
-    case BIT3:
-        currentState = TRIANGLE;
-    break;
-    }
-    */
-
-/*
-    switch(currentState) {
-    case DC:
-        DACSetValue(ADCPot);
-    break;
-    case SQUARE:
-        if (timeCount % 30 < 15) {
-            DACSetValue(ADCPot);
-        }
-        else {
-            DACSetValue(0);
-        }
-    break;
-    case SAWTOOTH:
-        unsigned int waveCount = timeCount % 40;
-        DACSetValue(ADCPot / 40 * waveCount);
-    break;
-    case TRIANGLE:
-
-    break;
-    default:
-    break;
-    }
-*/
-}
 
 void DACInit(void) {
     // Configure LDAC and CS for digital IO outputs
@@ -336,4 +310,7 @@ char buttonStates() {
     return returnState;
 }
 
+void linearity() {
+
+}
 
