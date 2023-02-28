@@ -51,7 +51,7 @@ __interrupt void Timer_A2_ISR(void) {
         DACSetValue(waveCount * (float)(ADCPot / 4096.0));
         if(goingUp) waveCount+= 1400;
         else waveCount-= 1400;
-        if(waveCount > 4000) goingUp = false;
+        if(waveCount > 4090) goingUp = false;
         if(waveCount < 100) goingUp = true;
         /*
         DACSetValue(waveCount);
