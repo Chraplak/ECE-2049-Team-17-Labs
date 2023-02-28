@@ -14,35 +14,24 @@ float linearity();
 
 enum States{HOME, DC, SQUARE, SAWTOOTH, TRIANGLE};
 
-int currentState = TRIANGLE;
+int currentState = HOME;
 long unsigned int timeCount = 0;
 unsigned int leapCount1 = 0, leapCount2 = 0;
 unsigned int ADCPot = 0;
 unsigned int counter = 0;
-bool rise = true;
-unsigned int sawCount = 0;
-
 unsigned int waveCount = 0;
+bool goingUp = true;
+
+// 1/100 s = 0.01s
+// 1/75 s = 0.01333s
+// 1/150 s = 0.006666s
+
+// ideal is 1/3000 = 0.0003333s
+// 1048576/3000 = 349.5
 
 // TIMER INTERRUPT
 #pragma vector = TIMER2_A0_VECTOR
 __interrupt void Timer_A2_ISR(void) {
-
-    if (leapCount1 < 142 && leapCount2 < 187) {
-        timeCount++;
-        leapCount1++;
-    }
-    else if (leapCount1 == 142) {
-        leapCount1 = 0;
-        leapCount2++;
-    }
-    else {
-        leapCount2 = 0;
-    }
-
-    //unsigned int period = 375.0 * 3.6;
-
-    //double value = 0.0;
 
     switch(currentState) {
     case SQUARE:
@@ -58,71 +47,39 @@ __interrupt void Timer_A2_ISR(void) {
         }
     break;
     case SAWTOOTH:
-
-        sawCount++;
-        if (sawCount >= 40) {
-            sawCount = 0;
-        }
-        unsigned int value = (unsigned int)((double)ADCPot * (double)sawCount / 40.0);
-        DACSetValue(value);
-
-
-        /*
-        counter++;
-        value += (double)ADCPot/40.0;
-        if (counter >= 30) {
-            counter = 0;
-            value = 0.0;
-        }
-        DACSetValue((unsigned int)value);
-        */
-
-
-
-        ////////////////////////////////
-        /*
-        counter++;
-        if (counter >= 200) counter = 0;
-        DACSetValue((ADCPot * ((double)counter / 20.0)));
-        */
-
-
-
-        /*
         DACSetValue(waveCount * (float)(ADCPot / 4096.0));
-        waveCount+= 375;
+        waveCount+= 345;
         if(waveCount > 4000) waveCount = 0;
-        */
-
-
     break;
     case TRIANGLE:
-
-        if (rise == true) counter++;
-        else counter--;
-        if (counter <= 0) rise = true;
-        else if (counter >= 20) rise = false;
-        DACSetValue((unsigned int)((double)ADCPot * ((double)counter / 20.0)));
-
-
-        /*
-        if (rise == true) waveCount += period;
-        else waveCount -= period;
         DACSetValue(waveCount * (float)(ADCPot / 4096.0));
-        if(waveCount > 4096 - period) {
-            rise = false;
-        }
-        else if (waveCount <= 0) {
-            rise = true;
-        }
+        if(goingUp) waveCount+= 1400;
+        else waveCount-= 1400;
+        if(waveCount > 4090) goingUp = false;
+        if(waveCount < 100) goingUp = true;
+        /*
+        DACSetValue(waveCount);
+        if(goingUp) waveCount+= ADCPot / 10;
+        else waveCount-= ADCPot / 10;
+        if(waveCount > 4000) goingUp = false;
+        if(waveCount < 100) goingUp = true;
         */
     break;
     case DC:
         DACSetValue(ADCPot);
     break;
-    default:
-        DACSetValue(0);
-    break;
+    }
+
+    if (leapCount1 < 142 && leapCount2 < 187) {
+        timeCount++;
+        leapCount1++;
+    }
+    else if (leapCount1 == 142) {
+        leapCount1 = 0;
+        leapCount2++;
+    }
+    else {
+        leapCount2 = 0;
     }
 
     char buttons = buttonStates();
@@ -182,7 +139,7 @@ void main(void) {
     ADC12CTL0 |= ADC12ENC | ADC12SC;     // Enable conversion
 
     // setup for LEDs, LCD, Keypad, Buttons
-    initLeds();
+    //initLeds();
     configDisplay();
     configKeypad();
     configButtons();
@@ -212,13 +169,6 @@ void main(void) {
 
     while(1) {}
 }
-
-// 1/100 s = 0.01s
-// 1/75 s = 0.01333s
-// 1/150 s = 0.006666s
-
-// ideal is 1/300 = 0.003333s
-// 32768/300 = 109.2266
 
 void DACInit(void) {
     // Configure LDAC and CS for digital IO outputs
