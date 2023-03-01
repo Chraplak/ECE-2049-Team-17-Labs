@@ -43,15 +43,17 @@ __interrupt void Timer_A2_ISR(void) {
         }
     break;
     case SAWTOOTH:
-        DACSetValue(waveCount * (float)(ADCPot / 4096.0));
-        waveCount+= 345;
+        DACSetValue(waveCount);
+        //DACSetValue(waveCount * (float)(ADCPot / 4096.0));
+        waveCount+= 120; //345
         if(waveCount > 4000) waveCount = 0;
     break;
     case TRIANGLE:
-        DACSetValue(waveCount * (float)(ADCPot / 4096.0));
-        if(goingUp) waveCount+= 1400;
-        else waveCount-= 1400;
-        if(waveCount > 4090) goingUp = false;
+        DACSetValue(waveCount);
+        //DACSetValue(waveCount * (float)(ADCPot / 4096.0));
+        if(goingUp) waveCount+= 1365;
+        else waveCount-= 1365;
+        if(waveCount > 4000) goingUp = false;
         if(waveCount < 100) goingUp = true;
         /*
         DACSetValue(waveCount);
@@ -108,7 +110,7 @@ void main(void) {
 
     // timer A2 management
     TA2CTL = TASSEL_1 + ID_0 + MC_1; // 32786 Hz is set
-    TA2CCR0 = 10; // sets interrupt to occur every (TA2CCR0 + 1)/32786 seconds
+    TA2CCR0 = 11; // sets interrupt to occur every (TA2CCR0 + 1)/32786 seconds
     TA2CCTL0 = CCIE; // enables TA2CCR0 interrupt
 
 
