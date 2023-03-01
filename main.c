@@ -24,11 +24,20 @@ unsigned int counter = 0;
 unsigned int max = 4095;
 
 unsigned int DACValue = 0;
+unsigned int increment = 210;
+
+float linVal = 0.0;
+unsigned int ADC = 0;
 
 
 // TIMER INTERRUPT
 #pragma vector = TIMER2_A0_VECTOR
 __interrupt void Timer_A2_ISR(void) {
+
+    float linTest;
+    unsigned int testDAC;
+    linTest = linVal;
+    testDAC = DACValue;
 
     if (leapCount1 < 142 && leapCount2 < 187) {
         timeCount++;
@@ -45,33 +54,46 @@ __interrupt void Timer_A2_ISR(void) {
     switch(currentState) {
     case SQUARE:
         counter++;
-        if (counter >= 10) {
+        if (counter >= 56) {
             counter = 0;
         }
-        if (counter < 5) {
+
+        if (counter < 28) {
             DACValue = ADCPot;
-            //DACSetValue(ADCPot);
         }
         else {
             DACValue = 0;
-            //DACSetValue(0);
         }
+
+        //Testing purposes
+        //DACValue = ADCPot;
 
 
     break;
     case SAWTOOTH:
-        DACValue = waveCount * (float)(max / 4095.0);
+        //DACValue = waveCount * (float)(max / 4095.0);
+        DACValue = waveCount;
         //DACSetValue(waveCount * (float)(max / 4095.0));
-        waveCount+= 345;
-        if(waveCount > 4000) waveCount = 0;
+        waveCount+= 53;
+        if(waveCount >= 4000) waveCount = 0;
     break;
     case TRIANGLE:
-        DACValue = waveCount * (float)(max / 4095.0);
+
+        //DACValue = waveCount * (float)(max / 4095.0);
+        DACValue = waveCount;
         //DACSetValue(waveCount * (float)(max / 4095.0));
-        if(goingUp) waveCount+= 1365;
-        else waveCount-= 1365;
-        if(waveCount > 4090) goingUp = false;
-        if(waveCount < 100) goingUp = true;
+
+        if(goingUp) waveCount+= increment;
+                else waveCount-= increment;
+        if(waveCount > 4095 - increment) {
+            goingUp = false;
+            //waveCount = 4095;
+        }
+        else if(waveCount < increment) {
+            goingUp = true;
+            //waveCount = 0;
+        }
+
     break;
     case DC:
         DACValue = ADCPot;
@@ -90,7 +112,7 @@ void main(void) {
 
     // timer A2 management
     TA2CTL = TASSEL_2 + ID_0 + MC_1; // 32786 Hz is set
-    TA2CCR0 = 737; // sets interrupt to occur every (TA2CCR0 + 1)/32786 seconds
+    TA2CCR0 = 183; // sets interrupt to occur every (TA2CCR0 + 1)/32786 seconds
     TA2CCTL0 = CCIE; // enables TA2CCR0 interrupt
 
 
@@ -107,7 +129,7 @@ void main(void) {
     ADC12CTL1 = ADC12SHP + ADC12CONSEQ_1;                     // Enable sample timer
 
     ADC12MCTL0 = ADC12SREF_0 + ADC12INCH_0;    // ADC i/p ch A10 = temp sense
-    ADC12MCTL1 = ADC12SREF_0 + ADC12INCH_0 + ADC12EOS;
+    ADC12MCTL1 = ADC12SREF_0 + ADC12INCH_1 + ADC12EOS;
     // ACD12SREF_0 = Vref+ = Vcc
     __delay_cycles(100);                      // delay to allow Ref to settle
     ADC12CTL0 |= ADC12ENC | ADC12SC;     // Enable conversion
@@ -139,8 +161,6 @@ void main(void) {
     //Sampling and conversion start
     ADC12CTL0 |= ADC12SC;
 
-    float value = 0.0;
-
     while(1) {
         if (ADC12IFG0) {
             ADCPot = ADC12MEM0;
@@ -149,12 +169,17 @@ void main(void) {
             //Sampling and conversion start
             ADC12CTL0 |= ADC12SC;
         }
-
-        /*
-        if (currentState == SQUARE && timeCount % 4000 == 0) {
-            value = linearity();
+        if (ADC12IFG1) {
+            ADC = ADC12MEM1;
+            //clear the start bit
+            ADC12CTL0 &= ~ADC12SC;
+            //Sampling and conversion start
+            ADC12CTL0 |= ADC12SC;
         }
-        */
+
+        if (currentState == SQUARE && timeCount % 4000 == 0) {
+            linVal = linearity();
+        }
 
         char buttons = buttonStates();
 
@@ -276,12 +301,11 @@ char buttonStates() {
 }
 
 float linearity() {
-    float value = 0.0;
-    if (ADC12IFG1) {
-        unsigned int ADC = ADC12MEM1;
-        long unsigned int intVal = ADC * 100000 * 33 / 4095;
-        value = (float)intVal / 10000.0;
+    //float value = 0.0;
+    //if (ADC12IFG1) {
+        //long unsigned int intVal = ADC * 100000 * 33 / 4095;
+        //value = (float)intVal / 10000.0;
         //value = (float)ADC / 4095.0 * 3.3;
-    }
-    return value;
+    //}
+    return (float)ADC / 4095.0 * 3.3;
 }
