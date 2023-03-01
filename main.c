@@ -10,6 +10,7 @@ void DACInit(void);
 void DACSetValue(unsigned int dac_code);
 void configButtons();
 char buttonStates();
+float linearity();
 
 enum States{HOME, DC, SQUARE, SAWTOOTH, TRIANGLE};
 
@@ -20,52 +21,14 @@ unsigned int ADCPot = 0;
 unsigned int waveCount = 0;
 bool goingUp = true;
 unsigned int counter = 0;
+unsigned int max = 4095;
+
+unsigned int DACValue = 0;
 
 
 // TIMER INTERRUPT
 #pragma vector = TIMER2_A0_VECTOR
 __interrupt void Timer_A2_ISR(void) {
-
-
-    //unsigned int waveCount = (timeCount % 20);
-    unsigned int max = 4095;
-
-    switch(currentState) {
-    case SQUARE:
-        counter++;
-        if (counter >= 30) {
-            counter = 0;
-        }
-        if (counter < 15) {
-            DACSetValue(ADCPot);
-        }
-        else {
-            DACSetValue(0);
-        }
-    break;
-    case SAWTOOTH:
-        DACSetValue(waveCount * (float)(max / 4095.0));
-        waveCount+= 345;
-        if(waveCount > 4000) waveCount = 0;
-    break;
-    case TRIANGLE:
-        DACSetValue(waveCount * (float)(max / 4095.0));
-        if(goingUp) waveCount+= 1365;
-        else waveCount-= 1365;
-        if(waveCount > 4090) goingUp = false;
-        if(waveCount < 100) goingUp = true;
-        /*
-        DACSetValue(waveCount);
-        if(goingUp) waveCount+= ADCPot / 10;
-        else waveCount-= ADCPot / 10;
-        if(waveCount > 4000) goingUp = false;
-        if(waveCount < 100) goingUp = true;
-        */
-    break;
-    case DC:
-        DACSetValue(ADCPot);
-    break;
-    }
 
     if (leapCount1 < 142 && leapCount2 < 187) {
         timeCount++;
@@ -79,37 +42,55 @@ __interrupt void Timer_A2_ISR(void) {
         leapCount2 = 0;
     }
 
-    char buttons = buttonStates();
+    switch(currentState) {
+    case SQUARE:
+        counter++;
+        if (counter >= 10) {
+            counter = 0;
+        }
+        if (counter < 5) {
+            DACValue = ADCPot;
+            //DACSetValue(ADCPot);
+        }
+        else {
+            DACValue = 0;
+            //DACSetValue(0);
+        }
 
-    if (buttons & BIT0) {
-            currentState = DC;
-    }
-    else if (buttons & BIT1) {
-            currentState = SQUARE;
-    }
-    else if (buttons & BIT2) {
-            currentState = SAWTOOTH;
-    }
-    else if (buttons & BIT3) {
-            currentState = TRIANGLE;
+
+    break;
+    case SAWTOOTH:
+        DACValue = waveCount * (float)(max / 4095.0);
+        //DACSetValue(waveCount * (float)(max / 4095.0));
+        waveCount+= 345;
+        if(waveCount > 4000) waveCount = 0;
+    break;
+    case TRIANGLE:
+        DACValue = waveCount * (float)(max / 4095.0);
+        //DACSetValue(waveCount * (float)(max / 4095.0));
+        if(goingUp) waveCount+= 1365;
+        else waveCount-= 1365;
+        if(waveCount > 4090) goingUp = false;
+        if(waveCount < 100) goingUp = true;
+    break;
+    case DC:
+        DACValue = ADCPot;
+        //DACSetValue(ADCPot);
+    break;
     }
 
-    if (!(ADC12CTL1 & ADC12BUSY)) {
-        ADCPot = ADC12MEM0;
-        //clear the start bit
-        ADC12CTL0 &= ~ADC12SC;
-        //Sampling and conversion start
-        ADC12CTL0 |= ADC12SC;
-    }
+
 }
 
 // MAIN
 void main(void) {
     WDTCTL = WDTPW + WDTHOLD;   // Stop WDT
 
+    //MCLK = DCOCLK;
+
     // timer A2 management
-    TA2CTL = TASSEL_1 + ID_0 + MC_1; // 32786 Hz is set
-    TA2CCR0 = 10; // sets interrupt to occur every (TA2CCR0 + 1)/32786 seconds
+    TA2CTL = TASSEL_2 + ID_0 + MC_1; // 32786 Hz is set
+    TA2CCR0 = 737; // sets interrupt to occur every (TA2CCR0 + 1)/32786 seconds
     TA2CCTL0 = CCIE; // enables TA2CCR0 interrupt
 
 
@@ -121,14 +102,15 @@ void main(void) {
     REFCTL0 &= ~REFMSTR;                      // Reset REFMSTR to hand over control
     // internal reference voltages to
     // ADC12_A control registers
-    ADC12CTL0 = ADC12SHT0_9 | ADC12ON;
+    ADC12CTL0 = ADC12SHT0_9 | ADC12ON | ADC12MSC | ADC12REFON;
 
-      ADC12CTL1 = ADC12SHP;                     // Enable sample timer
+    ADC12CTL1 = ADC12SHP + ADC12CONSEQ_1;                     // Enable sample timer
 
     ADC12MCTL0 = ADC12SREF_0 + ADC12INCH_0;    // ADC i/p ch A10 = temp sense
+    ADC12MCTL1 = ADC12SREF_0 + ADC12INCH_0 + ADC12EOS;
     // ACD12SREF_0 = Vref+ = Vcc
     __delay_cycles(100);                      // delay to allow Ref to settle
-    ADC12CTL0 |= ADC12ENC;     // Enable conversion
+    ADC12CTL0 |= ADC12ENC | ADC12SC;     // Enable conversion
 
     // setup for LEDs, LCD, Keypad, Buttons
     initLeds();
@@ -146,6 +128,9 @@ void main(void) {
     Graphics_drawStringCentered(&g_sContext, "B4:Triangle Wave", AUTO_STRING_LENGTH, 48, 75, TRANSPARENT_TEXT);
     Graphics_flushBuffer(&g_sContext);
 
+    P6SEL &= ~BIT1;
+    P6DIR &= ~BIT1;
+
     // enables global interrupts
     _BIS_SR(GIE);
 
@@ -154,7 +139,43 @@ void main(void) {
     //Sampling and conversion start
     ADC12CTL0 |= ADC12SC;
 
+    float value = 0.0;
+
     while(1) {
+        if (ADC12IFG0) {
+            ADCPot = ADC12MEM0;
+            //clear the start bit
+            ADC12CTL0 &= ~ADC12SC;
+            //Sampling and conversion start
+            ADC12CTL0 |= ADC12SC;
+        }
+
+        /*
+        if (currentState == SQUARE && timeCount % 4000 == 0) {
+            value = linearity();
+        }
+        */
+
+        char buttons = buttonStates();
+
+        if (buttons & BIT0) {
+                currentState = DC;
+                waveCount = 0;
+        }
+        else if (buttons & BIT1) {
+                currentState = SQUARE;
+                waveCount = 0;
+        }
+        else if (buttons & BIT2) {
+                currentState = SAWTOOTH;
+                waveCount = 0;
+        }
+        else if (buttons & BIT3) {
+                currentState = TRIANGLE;
+                waveCount = 0;
+        }
+
+        DACSetValue(DACValue);
     }
 }
 
@@ -252,4 +273,15 @@ char buttonStates() {
         returnState |= BIT3;
     }
     return returnState;
+}
+
+float linearity() {
+    float value = 0.0;
+    if (ADC12IFG1) {
+        unsigned int ADC = ADC12MEM1;
+        long unsigned int intVal = ADC * 100000 * 33 / 4095;
+        value = (float)intVal / 10000.0;
+        //value = (float)ADC / 4095.0 * 3.3;
+    }
+    return value;
 }
