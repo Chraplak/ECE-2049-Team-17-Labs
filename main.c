@@ -10,7 +10,6 @@ void DACInit(void);
 void DACSetValue(unsigned int dac_code);
 void configButtons();
 char buttonStates();
-float linearity();
 
 enum States{HOME, DC, SQUARE, SAWTOOTH, TRIANGLE};
 
@@ -18,20 +17,18 @@ int currentState = HOME;
 long unsigned int timeCount = 0;
 unsigned int leapCount1 = 0, leapCount2 = 0;
 unsigned int ADCPot = 0;
-unsigned int counter = 0;
 unsigned int waveCount = 0;
 bool goingUp = true;
+unsigned int counter = 0;
 
-// 1/100 s = 0.01s
-// 1/75 s = 0.01333s
-// 1/150 s = 0.006666s
-
-// ideal is 1/3000 = 0.0003333s
-// 1048576/3000 = 349.5
 
 // TIMER INTERRUPT
 #pragma vector = TIMER2_A0_VECTOR
 __interrupt void Timer_A2_ISR(void) {
+
+
+    //unsigned int waveCount = (timeCount % 20);
+    unsigned int max = 4095;
 
     switch(currentState) {
     case SQUARE:
@@ -47,14 +44,14 @@ __interrupt void Timer_A2_ISR(void) {
         }
     break;
     case SAWTOOTH:
-        DACSetValue(waveCount * (float)(ADCPot / 4096.0));
+        DACSetValue(waveCount * (float)(max / 4095.0));
         waveCount+= 345;
         if(waveCount > 4000) waveCount = 0;
     break;
     case TRIANGLE:
-        DACSetValue(waveCount * (float)(ADCPot / 4096.0));
-        if(goingUp) waveCount+= 1400;
-        else waveCount-= 1400;
+        DACSetValue(waveCount * (float)(max / 4095.0));
+        if(goingUp) waveCount+= 1365;
+        else waveCount-= 1365;
         if(waveCount > 4090) goingUp = false;
         if(waveCount < 100) goingUp = true;
         /*
@@ -85,29 +82,25 @@ __interrupt void Timer_A2_ISR(void) {
     char buttons = buttonStates();
 
     if (buttons & BIT0) {
-        currentState = DC;
+            currentState = DC;
     }
     else if (buttons & BIT1) {
-        currentState = SQUARE;
+            currentState = SQUARE;
     }
     else if (buttons & BIT2) {
-        currentState = SAWTOOTH;
+            currentState = SAWTOOTH;
     }
     else if (buttons & BIT3) {
-        currentState = TRIANGLE;
+            currentState = TRIANGLE;
     }
 
-    if (ADC12IFG0) {
+    if (!(ADC12CTL1 & ADC12BUSY)) {
         ADCPot = ADC12MEM0;
         //clear the start bit
         ADC12CTL0 &= ~ADC12SC;
         //Sampling and conversion start
         ADC12CTL0 |= ADC12SC;
     }
-
-    float value = 0.0;
-    value = linearity();
-
 }
 
 // MAIN
@@ -128,18 +121,17 @@ void main(void) {
     REFCTL0 &= ~REFMSTR;                      // Reset REFMSTR to hand over control
     // internal reference voltages to
     // ADC12_A control registers
-    ADC12CTL0 = ADC12SHT0_9 | ADC12ON | ADC12MSC | ADC12REFON;
+    ADC12CTL0 = ADC12SHT0_9 | ADC12ON;
 
-      ADC12CTL1 = ADC12SHP + ADC12CONSEQ_1;                     // Enable sample timer
+      ADC12CTL1 = ADC12SHP;                     // Enable sample timer
 
     ADC12MCTL0 = ADC12SREF_0 + ADC12INCH_0;    // ADC i/p ch A10 = temp sense
-    ADC12MCTL1 = ADC12SREF_0 + ADC12INCH_0 + ADC12EOS;
     // ACD12SREF_0 = Vref+ = Vcc
     __delay_cycles(100);                      // delay to allow Ref to settle
-    ADC12CTL0 |= ADC12ENC | ADC12SC;     // Enable conversion
+    ADC12CTL0 |= ADC12ENC;     // Enable conversion
 
     // setup for LEDs, LCD, Keypad, Buttons
-    //initLeds();
+    initLeds();
     configDisplay();
     configKeypad();
     configButtons();
@@ -154,11 +146,6 @@ void main(void) {
     Graphics_drawStringCentered(&g_sContext, "B4:Triangle Wave", AUTO_STRING_LENGTH, 48, 75, TRANSPARENT_TEXT);
     Graphics_flushBuffer(&g_sContext);
 
-
-    P6SEL &= ~BIT1;
-    P6DIR &= ~BIT1;
-
-
     // enables global interrupts
     _BIS_SR(GIE);
 
@@ -167,9 +154,11 @@ void main(void) {
     //Sampling and conversion start
     ADC12CTL0 |= ADC12SC;
 
-    while(1) {}
+    while(1) {
+    }
 }
 
+// DAC INITIALIZING HELPER
 void DACInit(void) {
     // Configure LDAC and CS for digital IO outputs
     DAC_PORT_LDAC_SEL &= ~DAC_PIN_LDAC;
@@ -181,6 +170,7 @@ void DACInit(void) {
     DAC_PORT_CS_OUT   |=  DAC_PIN_CS;  // Deassert CS
 }
 
+// DAC SETTING HELPER
 void DACSetValue(unsigned int dac_code) {
     // Start the SPI transmission by asserting CS (active low)
     // This assumes DACInit() already called
@@ -263,13 +253,3 @@ char buttonStates() {
     }
     return returnState;
 }
-
-float linearity() {
-    float value = 0.0;
-    if (ADC12IFG1) {
-        unsigned int ADC = ADC12MEM1;
-        value = (float)ADC / 4095.0 * 3.3;
-    }
-    return value;
-}
-
